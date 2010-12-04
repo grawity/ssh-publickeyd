@@ -1,0 +1,224 @@
+#!/usr/bin/env python
+# Horribly unfinished server-side of SecureCRT's "public key assistant" subsystem.
+# Working:
+#   - assistant protocol
+# Not working:
+#   - actual update of user's authorized_keys
+#
+# http://tools.ietf.org/html/rfc4819
+# Data types: http://tools.ietf.org/html/rfc4251#section-5
+
+import sys
+import struct
+import pickle
+
+FILE = "keys.p"
+
+class status:
+	SUCCESS					= 0
+	ACCESS_DENIED			= 1
+	STORAGE_EXCEEDED		= 2
+	VERSION_NOT_SUPPORTED	= 3
+	KEY_NOT_FOUND			= 4
+	KEY_NOT_SUPPORTED		= 5
+	KEY_ALREADY_PRESENT		= 6
+	GENERAL_FAILURE			= 7
+	REQUEST_NOT_SUPPORTED	= 8
+	ATTRIBUTE_NOT_SUPPORTED	= 9
+
+statuses = {
+	status.SUCCESS:					"Success",
+	status.ACCESS_DENIED:			"Access denied",
+	status.VERSION_NOT_SUPPORTED:	"Protocol version not supported",
+	status.KEY_NOT_FOUND:			"Key not found",
+	status.KEY_NOT_SUPPORTED:		"Key type not supported",
+	status.KEY_ALREADY_PRESENT:		"Key already present",
+	status.GENERAL_FAILURE:			"General failure",
+	status.REQUEST_NOT_SUPPORTED:	"Request not supported",
+	status.ATTRIBUTE_NOT_SUPPORTED:	"Attribute not supported",
+}
+
+sys.stderr = open("/tmp/pklog", "w")
+def log(text):
+	print >> sys.stderr, text
+	sys.stderr.flush()
+
+def save_keys():
+	global keys, FILE
+	pickle.dump(keys, open(FILE, "wb"))
+
+def parse_openssh_pubkey(string):
+	algo, blob, comment = string.split(None, 2)
+	blob = blob.decode("base64")
+
+	pass
+
+def load_keys():
+	global keys, FILE
+	keys = pickle.load(open(FILE, "rb"))
+	return
+
+def load_keys_openssh():
+	for line in open("/home/grawity/.ssh/authorized_keys", "r"):
+		if not line or line.startswith("#"):
+			continue
+		else:
+			key = parse_openssh_pubkey(line.strip("\n"))
+			print key
+			#keys.append(key)
+
+load_keys_openssh()
+sys.exit()
+
+def read_uint32():
+	buf = sys.stdin.read(4)
+	if not buf:
+		raise IOError
+	num, = struct.unpack("!L", buf)
+	return num
+
+def read_bool():
+	buf = sys.stdin.read(1)
+	if not buf:
+		raise IOError
+	val, = struct.unpack("!?", buf)
+	return val
+
+def read_string():
+	buf = sys.stdin.read(4)
+	if not buf:
+		raise IOError
+	length, = struct.unpack("!L", buf)
+	buf = sys.stdin.read(length)
+	return buf
+
+def read_packet():
+	length = read_uint32()
+	name = read_string()
+	datalen = length-(4+len(name))
+	return name, datalen
+
+def send_packet(*data):
+	fmt = "!L"
+	outdata = []
+	for d in data:
+		if isinstance(d, int):
+			fmt += "L"
+			outdata += [d]
+		elif isinstance(d, bool):
+			fmt += "?"
+			outdata += [d]
+		elif isinstance(d, str):
+			fmt += "L%ds" % len(d)
+			outdata += [len(d), d]
+	length = struct.calcsize(fmt)-4
+	log("out: %s[%d]" % (repr(data[0]), length))
+	buf = struct.pack(fmt, length, *outdata)
+	sys.stdout.write(buf)
+	sys.stdout.flush()
+
+def send_status(code):
+	msg = statuses.get(code, status.GENERAL_FAILURE)
+	send_packet("status", code, msg, "en_US")
+
+keys = {}
+
+Attributes = (
+	#"comment",
+	#"comment-language",
+	#"command-override",
+	#"subsystem",
+	#"x11",
+	#"shell",
+	#"exec",
+	#"agent",
+	#"env",
+	#"from",
+	#"port-forward",
+	#"reverse-forward",
+)
+
+def vd_list():
+	global keys
+	for key, attributes in keys.items():
+		kalgo, kblob = key
+		data = [kalgo, kblob, len(attributes)]
+		for a in attributes:
+			data += [a["name"], a["value"]]
+		send_packet("publickey", *data)
+	return status.SUCCESS
+
+def vd_add():
+	global keys
+	kalgo = read_string()
+	kblob = read_string()
+	do_overwrite = read_bool()
+	num_attributes = read_uint32()
+	attributes = []
+	while num_attributes:
+		attr_name = read_string()
+		attr_value = read_string()
+		attr_critical = read_bool()
+		attributes.append({
+			"name": attr_name,
+			"value": attr_value,
+			"critical": attr_critical,
+		})
+		num_attributes -= 1
+	
+	if (kalgo, kblob) in keys and not do_overwrite:
+		return status.KEY_ALREADY_PRESENT
+	for a in attributes:
+		if a["critical"] and a["name"] not in Attributes:
+			return status.ATTRIBUTE_NOT_SUPPORTED
+
+	keys[kalgo, kblob] = attributes
+	return status.SUCCESS
+
+def vd_remove():
+	global keys
+	kalgo = read_string()
+	kblob = read_string()
+	if (kalgo, kblob) in keys:
+		del keys[kalgo, kblob]
+		return status.SUCCESS
+	else:
+		return status.KEY_NOT_FOUND
+
+def vd_listattributes():
+	for a in Attributes:
+		send_packet("attribute", a, False)
+	return status.SUCCESS
+
+load_keys()
+log("Loaded %d keys" % len(keys))
+
+try:
+	while True:
+		name, datalen = read_packet()
+		log("in: %s[%d]" % (repr(name), datalen))
+		if name == "version":
+			ver = read_uint32()
+			log("version = %d" % ver)
+			if ver == 2:
+				send_packet("version", 2)
+			else:
+				send_status(status.VERSION_NOT_SUPPORTED)
+				sys.exit()
+		elif name == "list":
+			send_status(vd_list())
+			pass
+		elif name == "add":
+			send_status(vd_add())
+		elif name == "remove":
+			send_status(vd_remove())
+		elif name == "listattributes":
+			send_status(vd_listattributes())
+		else:
+			log("discarding %d" % datalen)
+			sys.stdin.read(datalen)
+			send_status(status.REQUEST_NOT_SUPPORTED)
+except IOError:
+	log("Closed")
+	save_keys()
+	sys.exit()
