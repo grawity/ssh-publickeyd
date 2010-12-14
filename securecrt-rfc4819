@@ -1,18 +1,22 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # Horribly unfinished server-side of SecureCRT's "public key assistant" subsystem.
 # Working:
 #   - assistant protocol
-# Not working:
 #   - actual update of user's authorized_keys
 #
 # http://tools.ietf.org/html/rfc4819
 # Data types: http://tools.ietf.org/html/rfc4251#section-5
 
-import sys
+import os, sys
 import struct
 import pickle
+import yaml
 
-FILE = "keys.p"
+sys.path.append(os.path.expanduser("~/lib/python"))
+import authorized_keys as authk
+
+path_openssh = os.path.expanduser("~/.ssh/authorized_keys")
+path_yaml = os.path.expanduser("~/securecrt-keys.yaml")
 
 class status:
 	SUCCESS					= 0
@@ -38,37 +42,174 @@ statuses = {
 	status.ATTRIBUTE_NOT_SUPPORTED:	"Attribute not supported",
 }
 
-sys.stderr = open("/tmp/pklog", "w")
+KnownAttributes = (
+	"comment",
+	"comment-language",
+	"command-override",
+	"subsystem",
+	"x11",
+	"shell",
+	"exec",
+	"agent",
+	"env",
+	"from",
+	"port-forward",
+	"reverse-forward",
+)
+
 def log(text):
 	print >> sys.stderr, text
 	sys.stderr.flush()
 
+def openssh_to_attributes(options):
+	attrs = []
+	for opt, value in options:
+		if opt == "command":
+			attrs.append({
+				"name": "command-override",
+				"value": value,
+				"critical": True,
+			})
+		elif opt == "from":
+			attrs.append({
+				"name": "from",
+				"value": value,
+				"critical": True,
+			})
+		elif opt == "no-agent-forwarding":
+			attrs.append({
+				"name": "agent",
+				"value": "",
+				"critical": True,
+			})
+		elif opt == "no-port-forwarding":
+			attrs.append({
+				"name": "port-forward",
+				"value": "",
+				"critical": True,
+			})
+			attrs.append({
+				"name": "reverse-forward",
+				"value": "",
+				"critical": True,
+			})
+		elif opt == "no-x11-forwarding":
+			attrs.append({
+				"name": "x11",
+				"value": "",
+				"critical": True,
+			})
+		else:
+			if value is True:
+				value = opt
+			else:
+				value = "=".join((opt, value))
+			attrs.append({
+				"name": "x-openssh-option",
+				"value": value,
+				"critical": False,
+			})
+	return attrs
+
+def attributes_to_openssh(attrs):
+	opts = authk.PublicKeyOptions()
+	unparsed = []
+	for a in attrs:
+		name, value, critical = a["name"], a["value"], a["critical"]
+		if name == "agent":
+			opts.append(("no-agent-forwarding", True))
+		elif name == "command-override":
+			opts.append(("command", value))
+		elif name == "comment":
+			pass
+		elif name == "from":
+			opts.append(("from", value))
+		elif name == "port-forward":
+			opts.append(("no-port-forwarding", True))
+		elif name == "x11":
+			opts.append(("no-x11-forwarding", True))
+		elif name == "x-openssh-option":
+			if "=" in value:
+				opts.append(value.split("=", 1))
+			else:
+				opts.append((value, True))
+		else:
+			unparsed.append((critical, name, value))
+	return opts, unparsed
+
 def save_keys():
-	global keys, FILE
-	pickle.dump(keys, open(FILE, "wb"))
-
-def parse_openssh_pubkey(string):
-	algo, blob, comment = string.split(None, 2)
-	blob = blob.decode("base64")
-
-	pass
+	save_keys_openssh()
+	save_keys_yaml()
 
 def load_keys():
-	global keys, FILE
-	keys = pickle.load(open(FILE, "rb"))
-	return
+	return load_keys_openssh()
+	#eturn load_keys_yaml()
+
+def save_keys_yaml():
+	fh = open(path_yaml, "wb")
+	fh.write("# vim: ft=yaml\n")
+	data = []
+	for (kalgo, kblob), attrs in keys.items():
+		#data.append([kalgo, kblob, attrs])
+		data.append(dict(algo=kalgo, key=kblob, attributes=attrs))
+	yaml.dump(data, fh)
+
+def load_keys_yaml():
+	fh = open(path_yaml, "rb")
+	data = yaml.load(fh)
+	keys = {}
+	#for kalgo, kblob, attrs in data:
+	#	keys[kalgo, kblob] = attrs
+	for item in data:
+		keys[item["algo"], item["key"]] = item["attributes"]
+	return keys
 
 def load_keys_openssh():
-	for line in open("/home/grawity/.ssh/authorized_keys", "r"):
-		if not line or line.startswith("#"):
-			continue
-		else:
-			key = parse_openssh_pubkey(line.strip("\n"))
-			print key
-			#keys.append(key)
+	keys = {}
+	extra_attrs = []
+	for line in open(path_openssh, "r"):
+		line = line.strip()
+		if line and not line.startswith("#"):
+			key = authk.PublicKey(line)
+			attrs = openssh_to_attributes(key.options)
+			if len(key.comment):
+				attrs.append({
+					"name": "comment",
+					"value": key.comment,
+					"critical": False,
+				})
+			attrs += extra_attrs
+			extra_attrs = []
+			keys[key.algo, key.blob] = attrs
+		elif line and line.startswith("# attribute: "):
+			# hack to store attributes not supported by authorized_keys
+			name, value = line[13:].split("=", 2)
+			extra_attrs.append({
+				"name": name,
+				"value": value,
+				"critical": False,
+			})
+	return keys
 
-load_keys_openssh()
-sys.exit()
+def save_keys_openssh():
+	fh = open(path_openssh, "w")
+	for (kalgo, kblob), attrs in keys.items():
+		key = authk.PublicKey()
+		key.algo = kalgo
+		key.blob = kblob
+		for attr in attrs:
+			if attr["name"] == "comment":
+				key.comment = attr["value"]
+		key.options, unsup_attrs = attributes_to_openssh(attrs)
+
+		if len(key.comment):
+			fh.write("# %s\n" % key.comment)
+		fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
+		print >> fh, "# fprint: %s" % fpr
+		for attr in unsup_attrs:
+			print >> fh, "# attribute: %(name)s=%(value)s" % attr
+		print >> fh, key
+		print >> fh, ""
 
 def read_uint32():
 	buf = sys.stdin.read(4)
@@ -112,7 +253,7 @@ def send_packet(*data):
 			fmt += "L%ds" % len(d)
 			outdata += [len(d), d]
 	length = struct.calcsize(fmt)-4
-	log("out: %s[%d]" % (repr(data[0]), length))
+	log("out: %s data[%d]" % (repr(data[0]), length))
 	buf = struct.pack(fmt, length, *outdata)
 	sys.stdout.write(buf)
 	sys.stdout.flush()
@@ -121,30 +262,12 @@ def send_status(code):
 	msg = statuses.get(code, status.GENERAL_FAILURE)
 	send_packet("status", code, msg, "en_US")
 
-keys = {}
-
-Attributes = (
-	#"comment",
-	#"comment-language",
-	#"command-override",
-	#"subsystem",
-	#"x11",
-	#"shell",
-	#"exec",
-	#"agent",
-	#"env",
-	#"from",
-	#"port-forward",
-	#"reverse-forward",
-)
-
 def vd_list():
 	global keys
-	for key, attributes in keys.items():
-		kalgo, kblob = key
-		data = [kalgo, kblob, len(attributes)]
-		for a in attributes:
-			data += [a["name"], a["value"]]
+	for (kalgo, kblob), attrs in keys.items():
+		data = [kalgo, kblob, len(attrs)]
+		for attr in attrs:
+			data += attr["name"], attr["value"]
 		send_packet("publickey", *data)
 	return status.SUCCESS
 
@@ -152,27 +275,23 @@ def vd_add():
 	global keys
 	kalgo = read_string()
 	kblob = read_string()
-	do_overwrite = read_bool()
-	num_attributes = read_uint32()
-	attributes = []
-	while num_attributes:
-		attr_name = read_string()
-		attr_value = read_string()
-		attr_critical = read_bool()
-		attributes.append({
-			"name": attr_name,
-			"value": attr_value,
-			"critical": attr_critical,
+	overwrite = read_bool()
+	num_attrs = read_uint32()
+	attrs = []
+	while num_attrs:
+		attrs.append({
+			"name": read_string(),
+			"value": read_string(),
+			"critical": read_bool(),
 		})
-		num_attributes -= 1
+		num_attrs -= 1
 	
-	if (kalgo, kblob) in keys and not do_overwrite:
+	if (kalgo, kblob) in keys and not overwrite:
 		return status.KEY_ALREADY_PRESENT
-	for a in attributes:
-		if a["critical"] and a["name"] not in Attributes:
+	for attr in attrs:
+		if attr["critical"] and attr["name"] not in KnownAttributes:
 			return status.ATTRIBUTE_NOT_SUPPORTED
-
-	keys[kalgo, kblob] = attributes
+	keys[kalgo, kblob] = attrs
 	return status.SUCCESS
 
 def vd_remove():
@@ -186,17 +305,17 @@ def vd_remove():
 		return status.KEY_NOT_FOUND
 
 def vd_listattributes():
-	for a in Attributes:
+	for a in KnownAttributes:
 		send_packet("attribute", a, False)
 	return status.SUCCESS
 
-load_keys()
-log("Loaded %d keys" % len(keys))
+#sys.stderr = open("/tmp/pklog", "w")
+keys = load_keys()
 
 try:
 	while True:
 		name, datalen = read_packet()
-		log("in: %s[%d]" % (repr(name), datalen))
+		log("in: %s data[%d]" % (repr(name), datalen))
 		if name == "version":
 			ver = read_uint32()
 			log("version = %d" % ver)
@@ -219,6 +338,5 @@ try:
 			sys.stdin.read(datalen)
 			send_status(status.REQUEST_NOT_SUPPORTED)
 except IOError:
-	log("Closed")
 	save_keys()
 	sys.exit()
