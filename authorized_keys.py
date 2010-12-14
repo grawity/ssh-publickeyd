@@ -1,4 +1,12 @@
 #!/usr/bin/python
+# State-machine-based parser for OpenSSH authorized_keys files.
+#
+# for line in open("authorized_keys"):
+#     if line and not line.startswith("#"):
+#         yield PublicKey(line.strip())
+#
+# Todo: move PublicKey.split_options -> PublicKeyOptions.__init__()
+
 import os
 import base64
 import hashlib
