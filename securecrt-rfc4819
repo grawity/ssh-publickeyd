@@ -8,6 +8,7 @@
 # Data types: http://tools.ietf.org/html/rfc4251#section-5
 
 import os, sys
+import tempfile
 import struct
 import pickle
 import yaml
@@ -319,7 +320,10 @@ def vd_listattributes():
 		send_packet("attribute", a, False)
 	return status.SUCCESS
 
-#sys.stderr = open("/tmp/pklog", "w")
+log_file = tempfile.NamedTemporaryFile(mode="w", prefix="publickey",
+	suffix=".log", delete=False)
+sys.stderr = log_file
+
 keys = load_keys()
 
 try:
@@ -349,4 +353,5 @@ try:
 			send_status(status.REQUEST_NOT_SUPPORTED)
 except IOError:
 	save_keys()
+	log_file.delete = True
 	sys.exit()
