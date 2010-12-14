@@ -44,17 +44,17 @@ statuses = {
 
 KnownAttributes = (
 	"comment",
-	"comment-language",
+	#"comment-language",
 	"command-override",
-	"subsystem",
+	#"subsystem",
 	"x11",
 	"shell",
 	"exec",
 	"agent",
-	"env",
+	#"env",
 	"from",
 	"port-forward",
-	"reverse-forward",
+	#"reverse-forward",
 )
 
 def log(text):
