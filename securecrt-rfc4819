@@ -135,7 +135,7 @@ def attributes_to_openssh(attrs):
 			else:
 				opts.append((value, True))
 		else:
-			unparsed.append((critical, name, value))
+			unparsed.append(a)
 	return opts, unparsed
 
 def save_keys():
