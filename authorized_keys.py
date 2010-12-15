@@ -38,8 +38,7 @@ class PublicKey(object):
 		self.options = PublicKeyOptions(self._options)
 	
 	def __repr__(self):
-		return "<PublicKey algo=%s comment=%s>" % (
-			repr(self.algo), repr(self.comment))
+		return "<PublicKey algo=%r comment=%r>" % (self.algo, self.comment)
 	
 	def __str__(self):
 		options = self.options
