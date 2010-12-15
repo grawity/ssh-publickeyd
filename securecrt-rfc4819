@@ -190,6 +190,12 @@ def load_keys_openssh():
 				"value": value,
 				"critical": False,
 			})
+		elif line and not line.startswith("#: "):
+			extra_attrs.append({
+				"name": "x-comment",
+				"value": line[1:],
+				"critical": False,
+			})
 	return keys
 
 def save_keys_openssh():
@@ -204,11 +210,14 @@ def save_keys_openssh():
 		key.options, unsup_attrs = attributes_to_openssh(attrs)
 
 		if len(key.comment):
-			fh.write("# %s\n" % key.comment)
+			fh.write("#: %s\n" % key.comment)
 		fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
-		print >> fh, "# fprint: %s" % fpr
+		print >> fh, "#: %s" % fpr
 		for attr in unsup_attrs:
-			print >> fh, "# attribute: %(name)s=%(value)s" % attr
+			if attr["name"] == "x-comment":
+				print >> fh, "#%s" % attr["value"]
+			else:
+				print >> fh, "# attr: %(name)s=%(value)s" % attr
 		print >> fh, key
 		print >> fh, ""
 
@@ -324,6 +333,7 @@ def vd_listattributes():
 log_file = tempfile.NamedTemporaryFile(mode="w", prefix="publickey",
 	suffix=".log", delete=False)
 sys.stderr = log_file
+#sys.stderr = open("/tmp/log", "w")
 
 keys = load_keys()
 
