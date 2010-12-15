@@ -217,13 +217,13 @@ def key_list():
 	for (kalgo, kblob), attrs in keys.items():
 		yield kalgo, kblob, attrs
 
-def key_add(kalgo, kblob, attributes, overwrite=True):
+def key_add(kalgo, kblob, attrs, overwrite=True):
 	global keys
 	if (kalgo, kblob) in keys and not overwrite:
 		return status.KEY_ALREADY_PRESENT
 	for attr in attrs:
 		if attr["critical"] and attr["name"] not in KnownAttributes:
-			return statis.ATTRIBUTE_NOT_SUPPORTED
+			return status.ATTRIBUTE_NOT_SUPPORTED
 	keys[kalgo, kblob] = attrs
 	return status.SUCCESS
 
@@ -314,6 +314,7 @@ def vd_add():
 def vd_remove():
 	kalgo = read_string()
 	kblob = read_string()
+	return key_remove(kalgo, kblob)
 
 def vd_listattributes():
 	for a in KnownAttributes:
