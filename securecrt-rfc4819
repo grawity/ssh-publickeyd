@@ -140,7 +140,7 @@ def attributes_to_openssh(attrs):
 
 def save_keys():
 	save_keys_openssh()
-	save_keys_yaml()
+	#ave_keys_yaml()
 
 def load_keys():
 	return load_keys_openssh()
