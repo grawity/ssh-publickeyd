@@ -21,7 +21,7 @@ class Keystore(object):
 class YamlKeystore(Keystore):
 	def __init__(self, path=None):
 		self.path = path or os.path.expanduser("~/ssh-keys.yaml")
-	
+
 	def read(self):
 		fh = open(self.path, "r")
 		data = yaml.load(fh)
@@ -37,6 +37,16 @@ class YamlKeystore(Keystore):
 		for (kalgo, kblob), attrs in keys.items():
 			data.append({"algo": kalgo, "pubkey": kblob, "attributes": attrs})
 		yaml.dump(data, fh)
+
+	def add(self, kalgo, kblob, attrs):
+		keys = self.read()
+		keys[kalgo, kblob] = attrs
+		return self.write(keys)
+
+	def remove(self, kalgo, kblob):
+		keys = self.read()
+		del keys[kalgo, kblob]
+		return sefl.write(keys)
 
 	@classmethod
 	def isKnownAttribute(self, attr):
@@ -78,29 +88,44 @@ class OpenSSHKeystore(Keystore):
 					"critical": False,
 				})
 		return keys
-	
+
 	def write(self, keys):
 		fh = open(self.path, "w")
 		for (kalgo, kblob), attrs in keys.items():
-			key = authk.PublicKey()
-			key.algo = kalgo
-			key.blob = kblob
-			for attr in attrs:
-				if attr["name"] == "comment":
-					key.comment = attr["value"]
-			key.options, unsup_attrs = self.unparseOptions(attrs)
-			if len(key.comment):
-				fh.write("#: %s\n" % key.comment)
-			fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
-			print >> fh, "#: %s" % fpr
-			for attr in unsup_attrs:
-				if attr["name"] == "x-comment":
-					print >> fh, "#%s" % attr["value"]
-				else:
-					print >> fh, "# attr: %(name)s=%(value)s" % attr
-			print >> fh, key
-			print >> fh, ""
-	
+			self._appendKey(fh, kalgo, kblob, attrs)
+
+	def _appendKey(self, fh, kalgo, kblob, attrs):
+		key = authk.PublicKey()
+		key.algo = kalgo
+		key.blob = kblob
+		for attr in attrs:
+			if attr["name"] == "comment":
+				key.comment = attr["value"]
+		key.options, unsup_attrs = self.unparseOptions(attrs)
+		if len(key.comment):
+			fh.write("#: %s\n" % key.comment)
+		fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
+		print >> fh, "#: %s" % fpr
+		for attr in unsup_attrs:
+			if attr["name"] == "x-comment":
+				print >> fh, "#%s" % attr["value"]
+			else:
+				print >> fh, "# attr: %(name)s=%(value)s" % attr
+		print >> fh, key
+		print >> fh, ""
+
+	def add(self, kalgo, kblob, attrs):
+		fh = open(self.path, "a")
+		self._appendKey(fh, kalgo, kblob, attrs)
+		#keys = self.read()
+		#keys[kalgo, kblob] = attrs
+		#return self.write(keys)
+
+	def remove(self, kalgo, kblob):
+		keys = self.read()
+		del keys[kalgo, kblob]
+		return sefl.write(keys)
+
 	@staticmethod
 	def parseOptions(options):
 		attrs = []
@@ -124,7 +149,7 @@ class OpenSSHKeystore(Keystore):
 				attrs.append(("x-openssh-option", xvalue))
 		# TODO:
 		return [{"name": a[0], "value": a[1], "critical": False} for a in attrs]
-	
+
 	@staticmethod
 	def unparseOptions(attrs):
 		opts = authk.PublicKeyOptions()
@@ -152,7 +177,7 @@ class OpenSSHKeystore(Keystore):
 			else:
 				unknown.append(a)
 		return opts, unknown
-	
+
 	attributes = ("agent", "command-override", "comment", "from",
 		"port-forward", "x11", "x-openssh-option")
 
@@ -164,58 +189,23 @@ class LshKeystore(Keystore):
 	def __init__(self, path=None):
 		self.path = path or os.path.expanduser("~/.lsh/authorized_keys_sha1")
 		#raise NotImplemented()
-	
+
 	def read(self):
-		import sexp
 		keys = {}
 		for f in os.listdir(self.path):
 			path = os.path.join(self.path, f)
-			keySexp = sexp.Sexp(open(path, "rb")).tree
-			assert keySexp[0] == "public-key"
-			keySexp = keySexp[1]
-			algo = keySexp[0]
-			data = []
-			if algo == "rsa-pkcs1-sha1":
-				algo = "ssh-rsa"
-				n = keySexp.find("n").next()[1]
-				e = keySexp.find("e").next()[1]
-				keyblob = struct.pack("!L", 7) + "ssh-rsa" + \
-					struct.pack("!L", len(e)) + e + \
-					struct.pack("!L", len(n)) + n
-			else:
-				raise NotImplemented("unknown key type %s" % algo)
-			keys[algo, keyblob] = []
+			kalgo, kblob = self.parseSexp(open(path, "rb"))
+			keys[kalgo, kblob] = []
 		return keys
-	
+
 	def write(self, keys):
-		import sexp
 		import hashlib
-		from StringIO import StringIO
 		storedKeys = set(os.listdir(self.path))
 		currentKeys = set()
 		for (kalgo, kblob), attrs in keys.items():
-			buf = StringIO(kblob)
-			if kalgo == "ssh-rsa":
-				# Todo: generalize read_string()
-				length, = struct.unpack("!L", buf.read(4))
-				buf.read(length)
-				length, = struct.unpack("!L", buf.read(4))
-				e = buf.read(length)
-				length, = struct.unpack("!L", buf.read(4))
-				n = buf.read(length)
-
-				key = sexp.List()
-				key.append(sexp.String("rsa-pkcs1-sha1"))
-				key.append(sexp.List([sexp.String("n"), sexp.String(n)]))
-				key.append(sexp.List([sexp.String("e"), sexp.String(e)]))
-
-			exp = sexp.List()
-			exp.append(sexp.String("public-key"))
-			exp.append(key)
-
+			exp = self.unparseSexp(kalgo, kblob, attrs)
 			sha = hashlib.sha1(exp.canonical()).hexdigest()
 			currentKeys.add(sha)
-
 			if sha not in storedKeys:
 				path = os.path.join(self.path, sha)
 				open(path, "wb").write(exp.sexp())
@@ -223,7 +213,66 @@ class LshKeystore(Keystore):
 		for sha in storedKeys-currentKeys:
 			path = os.path.join(self.path, sha)
 			os.unlink(path)
-	
+
+	def add(self, kalgo, kblob, attrs):
+		import hashlib
+		exp = self.unparseSexp(kalgo, kblob, attrs)
+		sha = hashlib.sha1(exp.canonical()).hexdigest()
+		path = os.path.join(self.path, sha)
+		if os.path.exists(path):
+			return status.KEY_ALREADY_PRESENT
+		else:
+			open(path, "wb").write(exp.sexp())
+			return status.SUCCESS
+
+	def remove(self, kalgo, kblob):
+		raise NotImplemented
+
+	@classmethod
+	def parseSexp(self, expr):
+		import sexp
+		tree = sexp.Sexp(expr).tree
+		assert tree[0] == "public-key"
+		tree = tree[1]
+		algo = tree[0]
+		if algo == "rsa-pkcs1-sha1":
+			kalgo = "ssh-rsa"
+			n = tree.find("n").next()[1]
+			e = tree.find("e").next()[1]
+			# todo: SshProtocol class?
+			string = lambda s: struct.pack("!L", len(s)) + s
+			kblob = string("ssh-rsa") + string(e) + string(n)
+		else:
+			raise NotImplemented("unknown key type %s" % algo)
+		return kalgo, kblob
+
+	@classmethod
+	def unparseSexp(self, kalgo, kblob, attrs):
+		import sexp
+		from StringIO import StringIO
+		buf = StringIO(kblob)
+		if kalgo == "ssh-rsa":
+			# TODO
+			length, = struct.unpack("!L", buf.read(4))
+			buf.read(length)
+			length, = struct.unpack("!L", buf.read(4))
+			e = buf.read(length)
+			length, = struct.unpack("!L", buf.read(4))
+			n = buf.read(length)
+
+			key = sexp.List()
+			key.append(sexp.String("rsa-pkcs1-sha1"))
+			key.append(sexp.List([sexp.String("n"), sexp.String(n)]))
+			key.append(sexp.List([sexp.String("e"), sexp.String(e)]))
+
+		else:
+			raise NotImplemented("keys of type %s not supported yet" % kalgo)
+
+		exp = sexp.List()
+		exp.append(sexp.String("public-key"))
+		exp.append(key)
+		return exp
+
 	@classmethod
 	def isKnownAttribute(self, name):
 		return name in ("comment")
