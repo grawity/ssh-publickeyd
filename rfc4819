@@ -1,8 +1,14 @@
 #!/usr/bin/env python2
-# Sorta unfinished server-side of SecureCRT's "public key assistant" subsystem.
-# Working:
-#   - assistant protocol
-#   - actual update of user's authorized_keys
+# Server-side of SecureCRT's "public key assistant" subsystem.
+#
+# Configuring OpenSSHd:
+#
+#   1. Add the following to /etc/ssh/sshd_config
+#
+#        Subsystem publickey             /usr/local/bin/rfc4819
+#        Subsystem publickey@vandyke.com /usr/local/bin/rfc4819
+#
+#   2. Reload `sshd`
 #
 # http://tools.ietf.org/html/rfc4819
 # Data types: http://tools.ietf.org/html/rfc4251#section-5
