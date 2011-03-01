@@ -1,6 +1,14 @@
 #!/usr/bin/env python2
 # Server-side of SecureCRT's "public key assistant" subsystem.
 #
+# Requirements:
+#
+#   - lib/authorized_keys.py from the same gitrepo
+#
+#   - python-yaml, but only if YamlKeystore is being used.
+#     (You don't need it, so just comment out "import yaml" below.
+#     I'm too lazy to do it myself.)
+#
 # Configuring OpenSSHd:
 #
 #   1. Add the following to /etc/ssh/sshd_config
