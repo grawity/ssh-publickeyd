@@ -21,6 +21,7 @@
 # http://tools.ietf.org/html/rfc4819
 # Data types: http://tools.ietf.org/html/rfc4251#section-5
 
+from __future__ import print_function
 import os, sys
 import tempfile
 import struct
@@ -316,7 +317,7 @@ statuses = {
 }
 
 def log(text):
-	print >> sys.stderr, text
+	print(text, file=sys.stderr)
 	sys.stderr.flush()
 
 keystore = OpenSSHKeystore()
@@ -437,6 +438,16 @@ def vd_listattributes():
 	for a in KnownAttributes:
 		send_packet("attribute", a, False)
 	return status.SUCCESS
+
+def is_interactive():
+	try:
+		return os.isatty(sys.stdin.fileno())
+	except AttributeError:
+		return false
+
+if is_interactive():
+	print("This tool is intended to be run as a SSH subsystem, not in interactive session.", file=sys.stderr)
+	sys.exit(2)
 
 log_file = tempfile.NamedTemporaryFile(mode="w", prefix="publickey",
 	suffix=".log", delete=False)
