@@ -235,10 +235,10 @@ class LshKeystore(Keystore):
 		sha = hashlib.sha1(exp.canonical()).hexdigest()
 		path = os.path.join(self.path, sha)
 		if os.path.exists(path):
-			return status.KEY_ALREADY_PRESENT
+			return vdproto.KEY_ALREADY_PRESENT
 		else:
 			open(path, "wb").write(exp.sexp())
-			return status.SUCCESS
+			return vdproto.SUCCESS
 
 	def remove(self, kalgo, kblob):
 		raise NotImplemented
@@ -292,37 +292,126 @@ class LshKeystore(Keystore):
 	def isKnownAttribute(self, name):
 		return name in ("comment")
 
-class status:
-	SUCCESS					= 0
-	ACCESS_DENIED			= 1
-	STORAGE_EXCEEDED		= 2
+class sshproto():
+	@classmethod
+	def read_uint32(self):
+		buf = sys.stdin.read(4)
+		if not buf:
+			raise IOError
+		num, = struct.unpack("!L", buf)
+		return num
+
+	@classmethod
+	def read_bool(self):
+		buf = sys.stdin.read(1)
+		if not buf:
+			raise IOError
+		val, = struct.unpack("!?", buf)
+		return val
+
+	@classmethod
+	def read_string(self):
+		buf = sys.stdin.read(4)
+		if not buf:
+			raise IOError
+		length, = struct.unpack("!L", buf)
+		buf = sys.stdin.read(length)
+		return buf
+
+	@classmethod
+	def read_packet(self):
+		length = self.read_uint32()
+		name = self.read_string()
+		datalen = length-(4+len(name))
+		return name, datalen
+
+	@classmethod
+	def send_packet(self, *data):
+		fmt = "!L"
+		outdata = []
+		for d in data:
+			if isinstance(d, int):
+				fmt += "L"
+				outdata += [d]
+			elif isinstance(d, bool):
+				fmt += "?"
+				outdata += [d]
+			elif isinstance(d, str):
+				fmt += "L%ds" % len(d)
+				outdata += [len(d), d]
+		length = struct.calcsize(fmt)-4
+		log("out: %s data[%d]" % (repr(data[0]), length))
+		buf = struct.pack(fmt, length, *outdata)
+		sys.stdout.write(buf)
+		sys.stdout.flush()
+
+	@classmethod
+	def send_status(self, code):
+		msg = vdproto.statuses.get(code, vdproto.GENERAL_FAILURE)
+		self.send_packet("status", code, msg, "en_US")
+
+class vdproto():
+	SUCCESS			= 0
+	ACCESS_DENIED		= 1
+	STORAGE_EXCEEDED	= 2
 	VERSION_NOT_SUPPORTED	= 3
-	KEY_NOT_FOUND			= 4
-	KEY_NOT_SUPPORTED		= 5
-	KEY_ALREADY_PRESENT		= 6
-	GENERAL_FAILURE			= 7
+	KEY_NOT_FOUND		= 4
+	KEY_NOT_SUPPORTED	= 5
+	KEY_ALREADY_PRESENT	= 6
+	GENERAL_FAILURE		= 7
 	REQUEST_NOT_SUPPORTED	= 8
 	ATTRIBUTE_NOT_SUPPORTED	= 9
 
-statuses = {
-	status.SUCCESS:					"Success",
-	status.ACCESS_DENIED:			"Access denied",
-	status.VERSION_NOT_SUPPORTED:	"Protocol version not supported",
-	status.KEY_NOT_FOUND:			"Key not found",
-	status.KEY_NOT_SUPPORTED:		"Key type not supported",
-	status.KEY_ALREADY_PRESENT:		"Key already present",
-	status.GENERAL_FAILURE:			"General failure",
-	status.REQUEST_NOT_SUPPORTED:	"Request not supported",
-	status.ATTRIBUTE_NOT_SUPPORTED:	"Attribute not supported",
-}
+	statuses = {
+		SUCCESS:			"Success",
+		ACCESS_DENIED:			"Access denied",
+		VERSION_NOT_SUPPORTED:		"Protocol version not supported",
+		KEY_NOT_FOUND:			"Key not found",
+		KEY_NOT_SUPPORTED:		"Key type not supported",
+		KEY_ALREADY_PRESENT:		"Key already present",
+		GENERAL_FAILURE:		"General failure",
+		REQUEST_NOT_SUPPORTED:		"Request not supported",
+		ATTRIBUTE_NOT_SUPPORTED:	"Attribute not supported",
+	}
 
-def log(text):
-	print(text, file=sys.stderr)
-	sys.stderr.flush()
+	@staticmethod
+	def list():
+		global keys
+		for kalgo, kblob, attrs in key_list():
+			data = [kalgo, kblob, len(attrs)]
+			for attr in attrs:
+				data += attr["name"], attr["value"]
+			sshproto.send_packet("publickey", *data)
+		return self.SUCCESS
 
-keystore = OpenSSHKeystore()
-#keystore = LshKeystore()
-#keystore = YamlKeystore()
+	@staticmethod
+	def add():
+		global keys
+		kalgo = sshproto.read_string()
+		kblob = sshproto.read_string()
+		overwrite = sshproto.read_bool()
+		num_attrs = sshproto.read_uint32()
+		attrs = []
+		while num_attrs:
+			attrs.append({
+				"name": sshproto.read_string(),
+				"value": sshproto.read_string(),
+				"critical": sshproto.read_bool(),
+			})
+			num_attrs -= 1
+		return key_add(kalgo, kblob, attrs, overwrite)
+
+	@staticmethod
+	def remove():
+		kalgo = read_string()
+		kblob = read_string()
+		return key_remove(kalgo, kblob)
+
+	@staticmethod
+	def listattributes():
+		for a in KnownAttributes:
+			sshproto.send_packet("attribute", a, False)
+		return self.SUCCESS
 
 def save_keys():
 	return keystore.write(keys)
@@ -338,107 +427,24 @@ def key_list():
 def key_add(kalgo, kblob, attrs, overwrite=True):
 	global keys
 	if (kalgo, kblob) in keys and not overwrite:
-		return status.KEY_ALREADY_PRESENT
+		return vdproto.KEY_ALREADY_PRESENT
 	for attr in attrs:
 		if attr["critical"] and not keystore.isKnownAttribute(attr["name"]):
-			return status.ATTRIBUTE_NOT_SUPPORTED
+			return vdproto.ATTRIBUTE_NOT_SUPPORTED
 	keys[kalgo, kblob] = attrs
-	return status.SUCCESS
+	return vdproto.SUCCESS
 
 def key_remove(kalgo, kblob):
 	global keys
 	if (kalgo, kblob) in keys:
 		del keys[kalgo, kblob]
-		return status.SUCCESS
+		return vdproto.SUCCESS
 	else:
-		return status.KEY_NOT_FOUND
+		return vdproto.KEY_NOT_FOUND
 
-def read_uint32():
-	buf = sys.stdin.read(4)
-	if not buf:
-		raise IOError
-	num, = struct.unpack("!L", buf)
-	return num
-
-def read_bool():
-	buf = sys.stdin.read(1)
-	if not buf:
-		raise IOError
-	val, = struct.unpack("!?", buf)
-	return val
-
-def read_string():
-	buf = sys.stdin.read(4)
-	if not buf:
-		raise IOError
-	length, = struct.unpack("!L", buf)
-	buf = sys.stdin.read(length)
-	return buf
-
-def read_packet():
-	length = read_uint32()
-	name = read_string()
-	datalen = length-(4+len(name))
-	return name, datalen
-
-def send_packet(*data):
-	fmt = "!L"
-	outdata = []
-	for d in data:
-		if isinstance(d, int):
-			fmt += "L"
-			outdata += [d]
-		elif isinstance(d, bool):
-			fmt += "?"
-			outdata += [d]
-		elif isinstance(d, str):
-			fmt += "L%ds" % len(d)
-			outdata += [len(d), d]
-	length = struct.calcsize(fmt)-4
-	log("out: %s data[%d]" % (repr(data[0]), length))
-	buf = struct.pack(fmt, length, *outdata)
-	sys.stdout.write(buf)
-	sys.stdout.flush()
-
-def send_status(code):
-	msg = statuses.get(code, status.GENERAL_FAILURE)
-	send_packet("status", code, msg, "en_US")
-
-def vd_list():
-	global keys
-	for kalgo, kblob, attrs in key_list():
-		data = [kalgo, kblob, len(attrs)]
-		for attr in attrs:
-			data += attr["name"], attr["value"]
-		send_packet("publickey", *data)
-	return status.SUCCESS
-
-def vd_add():
-	global keys
-	kalgo = read_string()
-	kblob = read_string()
-	overwrite = read_bool()
-	num_attrs = read_uint32()
-	attrs = []
-	while num_attrs:
-		attrs.append({
-			"name": read_string(),
-			"value": read_string(),
-			"critical": read_bool(),
-		})
-		num_attrs -= 1
-	return key_add(kalgo, kblob, attrs, overwrite)
-
-def vd_remove():
-	kalgo = read_string()
-	kblob = read_string()
-	return key_remove(kalgo, kblob)
-
-def vd_listattributes():
-	for a in KnownAttributes:
-		send_packet("attribute", a, False)
-	return status.SUCCESS
-
+def log(text):
+	print(text, file=sys.stderr)
+	sys.stderr.flush()
 def is_interactive():
 	try:
 		return os.isatty(sys.stdin.fileno())
@@ -446,13 +452,17 @@ def is_interactive():
 		return false
 
 if is_interactive():
-	print("This tool is intended to be run as a SSH subsystem, not in interactive session.", file=sys.stderr)
+	print("This tool is intended to be run as a SSH subsystem, not in interactive session.",
+		file=sys.stderr)
 	sys.exit(2)
 
-log_file = tempfile.NamedTemporaryFile(mode="w", prefix="publickey",
-	suffix=".log", delete=False)
+log_file = tempfile.NamedTemporaryFile(
+	mode="w", prefix="publickey", suffix=".log", delete=False)
 sys.stderr = log_file
-#sys.stderr = open("/tmp/log", "w")
+
+keystore = OpenSSHKeystore()
+#keystore = LshKeystore()
+#keystore = YamlKeystore()
 
 keys = load_keys()
 
@@ -464,23 +474,23 @@ try:
 			ver = read_uint32()
 			log("version = %d" % ver)
 			if ver == 2:
-				send_packet("version", 2)
+				sshproto.send_packet("version", 2)
 			else:
-				send_status(status.VERSION_NOT_SUPPORTED)
+				sshproto.send_status(vdproto.VERSION_NOT_SUPPORTED)
 				sys.exit()
 		elif name == "list":
-			send_status(vd_list())
+			sshproto.send_status(vdproto.list())
 			pass
 		elif name == "add":
-			send_status(vd_add())
+			sshproto.send_status(vdproto.add())
 		elif name == "remove":
-			send_status(vd_remove())
+			sshproto.send_status(vdproto.remove())
 		elif name == "listattributes":
-			send_status(vd_listattributes())
+			sshproto.send_status(vdproto.listattributes())
 		else:
 			log("discarding %d" % datalen)
 			sys.stdin.read(datalen)
-			send_status(status.REQUEST_NOT_SUPPORTED)
+			sshproto.send_status(vdproto.REQUEST_NOT_SUPPORTED)
 except IOError:
 	save_keys()
 	log_file.delete = True
