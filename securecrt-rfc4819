@@ -25,7 +25,6 @@ from __future__ import print_function
 import os, sys
 import tempfile
 import struct
-import yaml
 
 sys.path.append(os.path.expanduser("~/lib/python"))
 import authorized_keys as authk
@@ -38,6 +37,8 @@ class YamlKeystore(Keystore):
 		self.path = path or os.path.expanduser("~/ssh-keys.yaml")
 
 	def read(self):
+		import yaml
+
 		fh = open(self.path, "r")
 		data = yaml.load(fh)
 		keys = {}
@@ -46,6 +47,8 @@ class YamlKeystore(Keystore):
 		return keys
 
 	def write(self, keys):
+		import yaml
+
 		fh = open(self.path, "w")
 		fh.write("# vim: ft=yaml\n")
 		data = []
