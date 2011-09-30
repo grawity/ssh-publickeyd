@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # State-machine-based parser for OpenSSH authorized_keys files.
 #
 # for line in open("authorized_keys"):
@@ -88,7 +87,7 @@ class PublicKey(object):
 				state = "dquote"
 		tokens.append(current)
 		
-		if tokens[0].startswith("ssh-"):
+		if tokens[0].startswith("ssh-") or tokens[0].startswith("ecdsa-"):
 			options = []
 		else:
 			options = self.split_options(tokens.pop(0))
@@ -145,3 +144,5 @@ class PublicKey(object):
 		else:
 			values.append(current)
 		return list(zip(keys, values))
+
+# vim: ft=python
