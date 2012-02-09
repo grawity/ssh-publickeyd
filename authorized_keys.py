@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# vim: ft=python
+
 # State-machine-based parser for OpenSSH authorized_keys files.
 #
 # for line in open("authorized_keys"):
@@ -6,7 +9,6 @@
 #
 # Todo: move PublicKey.split_options -> PublicKeyOptions.__init__()
 
-import os
 import base64
 import hashlib
 
@@ -21,8 +23,51 @@ class PublicKeyOptions(list):
 		return ",".join(o)
 	
 	@classmethod
-	def parse(self, text):
-		return self(PublicKey.split_options(text))
+	def from_string(klass, text):
+		keys = []
+		values = []
+		current = ""
+		state = "key"
+		for char in string:
+			if state == "key":
+				if char == ",":
+					keys.append(current)
+					values.append(True)
+					current = ""
+				elif char == "=":
+					keys.append(current)
+					current = ""
+					state = "value"
+				else:
+					current += char
+			elif state == "value":
+				if char == ",":
+					values.append(current)
+					current = ""
+					state = "key"
+				elif char == "\"":
+					current += char
+					state = "value dquote"
+				else:
+					current += char
+			elif state == "value dquote":
+				if char == "\"":
+					current += char
+					state = "value"
+				elif char == "\\":
+					current += char
+					state = "value dquote escape"
+				else:
+					current += char
+			elif state == "value dquote escape":
+				current += char
+				state = "value dquote"
+		if state == "key":
+			keys.append(current)
+			values.append(True)
+		else:
+			values.append(current)
+		return klass(zip(keys, values))
 
 class PublicKey(object):
 	def __init__(self, line=None):
@@ -87,7 +132,7 @@ class PublicKey(object):
 				state = "dquote"
 		tokens.append(current)
 		
-		if tokens[0].startswith("ssh-") or tokens[0].startswith("ecdsa-"):
+		if any(tokens[0].startswith, ["ssh-", "ecdsa-"]):
 			options = []
 		else:
 			options = self.split_options(tokens.pop(0))
@@ -100,49 +145,4 @@ class PublicKey(object):
 
 	@classmethod
 	def split_options(self, string):
-		keys = []
-		values = []
-		current = ""
-		state = "key"
-		for char in string:
-			if state == "key":
-				if char == ",":
-					keys.append(current)
-					values.append(True)
-					current = ""
-				elif char == "=":
-					keys.append(current)
-					current = ""
-					state = "value"
-				else:
-					current += char
-			elif state == "value":
-				if char == ",":
-					values.append(current)
-					current = ""
-					state = "key"
-				elif char == "\"":
-					current += char
-					state = "value dquote"
-				else:
-					current += char
-			elif state == "value dquote":
-				if char == "\"":
-					current += char
-					state = "value"
-				elif char == "\\":
-					current += char
-					state = "value dquote escape"
-				else:
-					current += char
-			elif state == "value dquote escape":
-				current += char
-				state = "value dquote"
-		if state == "key":
-			keys.append(current)
-			values.append(True)
-		else:
-			values.append(current)
-		return list(zip(keys, values))
-
-# vim: ft=python
+		return PublicKeyOptions.from_string(string)
