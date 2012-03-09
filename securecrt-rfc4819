@@ -26,8 +26,8 @@ import os, sys
 import tempfile
 import struct
 
-sys.path.append(os.path.expanduser("~/lib/python"))
-import authorized_keys as authk
+sys.path.append(os.path.expanduser("~/code/lib/python"))
+import nullroute.authorized_keys as authk
 
 class Keystore(object):
 	pass
@@ -123,14 +123,14 @@ class OpenSSHKeystore(Keystore):
 		if len(key.comment):
 			fh.write("#: %s\n" % key.comment)
 		fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
-		print >> fh, "#: %s" % fpr
+		print("#: %s" % fpr, file=fh)
 		for attr in unsup_attrs:
 			if attr["name"] == "x-comment":
-				print >> fh, "#%s" % attr["value"]
+				print("#%s" % attr["value"], file=fh)
 			else:
-				print >> fh, "# attr: %(name)s=%(value)s" % attr
-		print >> fh, key
-		print >> fh, ""
+				print("# attr: %(name)s=%(value)s" % attr, file=fh)
+		print(key, file=fh)
+		print("", file=fh)
 
 	def add(self, kalgo, kblob, attrs):
 		fh = open(self.path, "a")
@@ -203,6 +203,7 @@ class OpenSSHKeystore(Keystore):
 	def isKnownAttribute(self, name):
 		return name in self.attributes
 
+"""
 class LshKeystore(Keystore):
 	def __init__(self, path=None):
 		self.path = path or os.path.expanduser("~/.lsh/authorized_keys_sha1")
@@ -294,6 +295,7 @@ class LshKeystore(Keystore):
 	@classmethod
 	def isKnownAttribute(self, name):
 		return name in ("comment")
+"""
 
 class sshproto():
 	@classmethod
@@ -464,14 +466,10 @@ log_file = tempfile.NamedTemporaryFile(
 sys.stderr = log_file
 
 keystore = OpenSSHKeystore()
-#keystore = LshKeystore()
-#keystore = YamlKeystore()
-
-keys = load_keys()
 
 try:
 	while True:
-		name, datalen = read_packet()
+		name, datalen = sshproto.read_packet()
 		log("in: %s data[%d]" % (repr(name), datalen))
 		if name == "version":
 			ver = read_uint32()

@@ -28,7 +28,7 @@ class PublicKeyOptions(list):
 		values = []
 		current = ""
 		state = "key"
-		for char in string:
+		for char in text:
 			if state == "key":
 				if char == ",":
 					keys.append(current)
@@ -132,7 +132,8 @@ class PublicKey(object):
 				state = "dquote"
 		tokens.append(current)
 		
-		if any(tokens[0].startswith, ["ssh-", "ecdsa-"]):
+		if tokens[0] in {"ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256",
+				"ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}:
 			options = []
 		else:
 			options = self.split_options(tokens.pop(0))
