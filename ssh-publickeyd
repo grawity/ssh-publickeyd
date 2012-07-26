@@ -1,5 +1,12 @@
 #!/usr/bin/env python2
-# Server-side of SecureCRT's "public key assistant" subsystem.
+# Server-side of SecureCRT's "public key assistant" subsystem,
+# as defined in RFC 4819.
+#
+# Protocol documentation:
+#
+#     http://tools.ietf.org/html/rfc4819
+#     
+#     Data types: http://tools.ietf.org/html/rfc4251#section-5
 #
 # Requirements:
 #
@@ -17,9 +24,6 @@
 #        Subsystem publickey@vandyke.com /usr/local/bin/rfc4819
 #
 #   2. Reload `sshd`
-#
-# http://tools.ietf.org/html/rfc4819
-# Data types: http://tools.ietf.org/html/rfc4251#section-5
 
 from __future__ import print_function
 import os, sys
