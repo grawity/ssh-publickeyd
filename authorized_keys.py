@@ -75,14 +75,16 @@ class PublicKey(object):
 			self._options = []
 			self.algo = None
 			self.blob = None
+			self.prefix = None
 			self.comment = None
 		else:
 			sline = PublicKey.split_line(line)
-			self._options, self.algo, self.blob, self.comment = sline
+			self.prefix, self.algo, self.blob, self.comment = sline
+			self._options = PublicKey.split_options(self.prefix)
 		self.options = PublicKeyOptions(self._options)
 	
 	def __repr__(self):
-		return "<PublicKey algo=%r comment=%r>" % (self.algo, self.comment)
+		return "<PublicKey algo=%r prefix=%r comment=%r>" % (self.algo, self.prefix, self.comment)
 	
 	def __str__(self):
 		options = self.options
@@ -136,7 +138,7 @@ class PublicKey(object):
 				"ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}:
 			options = []
 		else:
-			options = self.split_options(tokens.pop(0))
+			options = tokens.pop(0)
 		algo = tokens[0]
 		blob = tokens[1]
 		comment = " ".join(tokens[2:])
