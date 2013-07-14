@@ -1,11 +1,12 @@
 #!/usr/bin/env python2
+# vim: ts=4:sw=4
 # Server-side of SecureCRT's "public key assistant" subsystem,
 # as defined in RFC 4819.
 #
 # Protocol documentation:
 #
 #     http://tools.ietf.org/html/rfc4819
-#     
+#
 #     Data types: http://tools.ietf.org/html/rfc4251#section-5
 #
 # Requirements:
@@ -31,61 +32,109 @@ import tempfile
 import struct
 
 sys.path.append(os.path.expanduser("~/code/lib/python"))
-import nullroute.authorized_keys as authk
+import nullroute.authorized_keys as authorized_key
 
 class Keystore(object):
 	pass
 
 class YamlKeystore(Keystore):
 	def __init__(self, path=None):
+		import yaml
+
 		self.path = path or os.path.expanduser("~/ssh-keys.yaml")
 
-	def read(self):
+	def load(self):
 		import yaml
 
-		fh = open(self.path, "r")
-		data = yaml.load(fh)
 		keys = {}
+
+		try:
+			with open(self.path, "r") as fh:
+				data = yaml.load(fh)
+		except:
+			return keys
+
 		for item in data:
 			keys[item["algo"], item["pubkey"]] = item["attributes"]
+
 		return keys
 
-	def write(self, keys):
+	def save(self, keys):
 		import yaml
 
-		fh = open(self.path, "w")
-		fh.write("# vim: ft=yaml\n")
 		data = []
+
 		for (kalgo, kblob), attrs in keys.items():
 			data.append({"algo": kalgo, "pubkey": kblob, "attributes": attrs})
-		yaml.dump(data, fh)
+
+		with open(self.path, "w") as fh:
+			fh.write("# vim: ft=yaml:nowrap:noet\n")
+			yaml.dump(data, fh)
+
+	def list(self):
+		keys = self.load()
+
+		for (kalgo, kblob), attrs in keys.items():
+			yield kalgo, kblob, attrs
+
+	def has_key(self, kalgo, kblob):
+		keys = self.load()
+
+		return (kalgo, kblob) in keys
 
 	def add(self, kalgo, kblob, attrs):
-		keys = self.read()
+		keys = self.load()
+
 		keys[kalgo, kblob] = attrs
-		return self.write(keys)
+		self.save(keys)
 
 	def remove(self, kalgo, kblob):
-		keys = self.read()
-		del keys[kalgo, kblob]
-		return sefl.write(keys)
+		keys = self.load()
+
+		if (kalgo, kblob) in keys:
+			del keys[kalgo, kblob]
+			self.save(keys)
+			return True
+		else:
+			return False
 
 	@classmethod
-	def isKnownAttribute(self, attr):
+	def knows_attribute(self, attr):
 		return True
 
-class OpenSSHKeystore(Keystore):
+class OpenSSHKeystore(Keystore): # {{{
 	def __init__(self, path=None):
 		self.path = path or os.path.expanduser("~/.ssh/authorized_keys")
 
-	def read(self):
+	def load(self):
 		keys = {}
 		extra_attrs = []
+
+		ATTR_PREFIX = "# attribute: "
+
 		for line in open(self.path, "r"):
 			line = line.strip()
-			if line and not line.startswith("#"):
-				key = authk.PublicKey(line)
-				attrs = self.parseOptions(key.options)
+			if not line:
+				pass
+			elif line.startswith(ATTR_PREFIX):
+				# hack to store attributes not supported by authorized_keys
+				name, value = line[len(ATTR_PREFIX):].split("=", 2)
+				extra_attrs.append({
+					"name": name,
+					"value": value,
+					"critical": False,
+				})
+			elif line.startswith("#:"):
+				pass
+			elif line.startswith("#"):
+				extra_attrs.append({
+					"name": "x-comment",
+					"value": line[1:],
+					"critical": False,
+				})
+			else:
+				key = authorized_key.PublicKey(line)
+				attrs = self.convopt_openssh_to_vandyke(key.options)
 				if len(key.comment):
 					attrs.append({
 						"name": "comment",
@@ -95,213 +144,222 @@ class OpenSSHKeystore(Keystore):
 				attrs += extra_attrs
 				extra_attrs = []
 				keys[key.algo, key.blob] = attrs
-			elif line and line.startswith("# attribute: "):
-				# hack to store attributes not supported by authorized_keys
-				name, value = line[13:].split("=", 2)
-				extra_attrs.append({
-					"name": name,
-					"value": value,
-					"critical": False,
-				})
-			elif line and not line.startswith("#: "):
-				extra_attrs.append({
-					"name": "x-comment",
-					"value": line[1:],
-					"critical": False,
-				})
 		return keys
 
-	def write(self, keys):
-		fh = open(self.path, "w")
-		for (kalgo, kblob), attrs in keys.items():
-			self._appendKey(fh, kalgo, kblob, attrs)
+	def save(self, keys):
+		with open(self.path, "w") as fh:
+			for (kalgo, kblob), attrs in keys.items():
+				self._append_key(fh, kalgo, kblob, attrs)
 
-	def _appendKey(self, fh, kalgo, kblob, attrs):
-		key = authk.PublicKey()
+	def _append_key(self, fh, kalgo, kblob, attrs):
+		key = authorized_key.PublicKey()
 		key.algo = kalgo
 		key.blob = kblob
 		for attr in attrs:
 			if attr["name"] == "comment":
 				key.comment = attr["value"]
-		key.options, unsup_attrs = self.unparseOptions(attrs)
+		key.options, unknown_attrs = self.convopt_vandyke_to_openssh(attrs)
 		if len(key.comment):
 			fh.write("#: %s\n" % key.comment)
 		fpr = ":".join("%02x" % ord(c) for c in key.fingerprint())
 		print("#: %s" % fpr, file=fh)
-		for attr in unsup_attrs:
+		for attr in unknown_attrs:
 			if attr["name"] == "x-comment":
 				print("#%s" % attr["value"], file=fh)
 			else:
 				print("# attr: %(name)s=%(value)s" % attr, file=fh)
 		print(key, file=fh)
 		print("", file=fh)
+	
+	def list(self):
+		keys = self.load()
+
+		for (kalgo, kblob), attrs in keys.items():
+			yield kalgo, kblob, attrs
+
+	def has_key(self, kalgo, kblob):
+		keys = self.load()
+
+		return (kalgo, kblob) in keys
 
 	def add(self, kalgo, kblob, attrs):
-		fh = open(self.path, "a")
-		self._appendKey(fh, kalgo, kblob, attrs)
-		#keys = self.read()
+		with open(self.path, "a") as fh:
+			self._append_key(fh, kalgo, kblob, attrs)
+
+		#keys = self.load()
 		#keys[kalgo, kblob] = attrs
-		#return self.write(keys)
+		#return self.save(keys)
 
 	def remove(self, kalgo, kblob):
-		keys = self.read()
-		del keys[kalgo, kblob]
-		return sefl.write(keys)
+		keys = self.load()
 
-	@staticmethod
-	def parseOptions(options):
-		attrs = []
-		for opt, value in options:
-			if opt == "command":
-				attrs.append(("command-override", value))
-			elif opt == "from":
-				attrs.append(("from", value))
-			elif opt == "no-agent-forwarding":
-				attrs.append(("agent", ""))
-			elif opt == "no-port-forwarding":
-				attrs.append(("port-forward", ""))
-				attrs.append(("reverse-forward", ""))
-			elif opt == "no-x11-forwarding":
-				attrs.append(("x11", ""))
-			else:
-				if value is True:
-					xvalue = opt
-				else:
-					xvalue = "=".join((opt, value))
-				attrs.append(("x-openssh-option", xvalue))
-		# TODO:
-		return [{"name": a[0], "value": a[1], "critical": False} for a in attrs]
-
-	@staticmethod
-	def unparseOptions(attrs):
-		opts = authk.PublicKeyOptions()
-		unknown = []
-		for a in attrs:
-			# TODO:
-			name, value, critical = a["name"], a["value"], a["critical"]
-			if name == "agent":
-				opts.append(("no-agent-forwarding", True))
-			elif name == "command-override":
-				opts.append(("command", value))
-			elif name == "comment":
-				pass
-			elif name == "from":
-				opts.append(("from", value))
-			elif name == "port-forward":
-				opts.append(("no-port-forwarding", True))
-			elif name == "x11":
-				opts.append(("no-x11-forwarding", True))
-			elif name == "x-openssh-option":
-				if "=" in value:
-					opts.append(value.split("=", 1))
-				else:
-					opts.append((value, True))
-			else:
-				unknown.append(a)
-		return opts, unknown
+		if (kalgo, kblob) in keys:
+			del keys[kalgo, kblob]
+			self.save(keys)
+			return True
+		else:
+			return False
 
 	attributes = ("agent", "command-override", "comment", "from",
 		"port-forward", "x11", "x-openssh-option")
 
 	@classmethod
-	def isKnownAttribute(self, name):
+	def knows_attribute(self, name):
 		return name in self.attributes
 
-"""
-class LshKeystore(Keystore):
-	def __init__(self, path=None):
-		self.path = path or os.path.expanduser("~/.lsh/authorized_keys_sha1")
-		#raise NotImplemented()
+	@staticmethod
+	def convopt_openssh_to_vandyke(in_opts):
+		tmp_attrs = []
 
-	def read(self):
-		keys = {}
-		for f in os.listdir(self.path):
-			path = os.path.join(self.path, f)
-			kalgo, kblob = self.parseSexp(open(path, "rb"))
-			keys[kalgo, kblob] = []
-		return keys
+		for opt, value in in_opts:
+			if opt == "command":
+				tmp_attrs.append(("command-override", value))
+			elif opt == "from":
+				tmp_attrs.append(("from", value))
+			elif opt == "no-agent-forwarding":
+				tmp_attrs.append(("agent", ""))
+			elif opt == "no-port-forwarding":
+				tmp_attrs.append(("port-forward", ""))
+				tmp_attrs.append(("reverse-forward", ""))
+			elif opt == "no-x11-forwarding":
+				tmp_attrs.append(("x11", ""))
+			else:
+				if value is True:
+					attr_value = opt
+				else:
+					attr_value = "%s=%s" % (opt, value)
+				tmp_attrs.append(("x-openssh-option", attr_value))
 
-	def write(self, keys):
-		import hashlib
-		storedKeys = set(os.listdir(self.path))
-		currentKeys = set()
-		for (kalgo, kblob), attrs in keys.items():
-			exp = self.unparseSexp(kalgo, kblob, attrs)
-			sha = hashlib.sha1(exp.canonical()).hexdigest()
-			currentKeys.add(sha)
-			if sha not in storedKeys:
-				path = os.path.join(self.path, sha)
-				open(path, "wb").write(exp.sexp())
+		out_attrs = [{"name": attr[0], "value": attr[1], "critical": False}
+		             for attr in tmp_attrs]
 
-		for sha in storedKeys-currentKeys:
-			path = os.path.join(self.path, sha)
-			os.unlink(path)
+		return out_attrs
 
-	def add(self, kalgo, kblob, attrs):
-		import hashlib
-		exp = self.unparseSexp(kalgo, kblob, attrs)
-		sha = hashlib.sha1(exp.canonical()).hexdigest()
-		path = os.path.join(self.path, sha)
-		if os.path.exists(path):
-			return vdproto.KEY_ALREADY_PRESENT
-		else:
-			open(path, "wb").write(exp.sexp())
-			return vdproto.SUCCESS
+	@staticmethod
+	def convopt_vandyke_to_openssh(in_attrs):
+		out_opts = authorized_key.PublicKeyOptions()
+		unknown_attrs = []
 
-	def remove(self, kalgo, kblob):
-		raise NotImplemented
+		for attr in in_attrs:
+			# TODO:
+			name, value, _ = attr["name"], attr["value"], attr["critical"]
+			if name == "agent":
+				out_opts.append(("no-agent-forwarding", True))
+			elif name == "command-override":
+				out_opts.append(("command", value))
+			elif name == "comment":
+				pass
+			elif name == "from":
+				out_opts.append(("from", value))
+			elif name == "port-forward":
+				out_opts.append(("no-port-forwarding", True))
+			elif name == "x11":
+				out_opts.append(("no-x11-forwarding", True))
+			elif name == "x-openssh-option":
+				if "=" in value:
+					out_opts.append(value.split("=", 1))
+				else:
+					out_opts.append((value, True))
+			else:
+				unknown_attrs.append(attr)
 
-	@classmethod
-	def parseSexp(self, expr):
-		import sexp
-		tree = sexp.Sexp(expr).tree
-		assert tree[0] == "public-key"
-		tree = tree[1]
-		algo = tree[0]
-		if algo == "rsa-pkcs1-sha1":
-			kalgo = "ssh-rsa"
-			n = tree.find("n").next()[1]
-			e = tree.find("e").next()[1]
-			# todo: SshProtocol class?
-			string = lambda s: struct.pack("!L", len(s)) + s
-			kblob = string("ssh-rsa") + string(e) + string(n)
-		else:
-			raise NotImplemented("unknown key type %s" % algo)
-		return kalgo, kblob
+		return out_opts, unknown_attrs
+# }}}
 
-	@classmethod
-	def unparseSexp(self, kalgo, kblob, attrs):
-		import sexp
-		from StringIO import StringIO
-		buf = StringIO(kblob)
-		if kalgo == "ssh-rsa":
-			# TODO
-			length, = struct.unpack("!L", buf.read(4))
-			buf.read(length)
-			length, = struct.unpack("!L", buf.read(4))
-			e = buf.read(length)
-			length, = struct.unpack("!L", buf.read(4))
-			n = buf.read(length)
+#class LshKeystore(Keystore): # {{{
+#	def __init__(self, path=None):
+#		self.path = path or os.path.expanduser("~/.lsh/authorized_keys_sha1")
+#		#raise NotImplemented()
+#
+#	def load(self):
+#		keys = {}
+#		for f in os.listdir(self.path):
+#			path = os.path.join(self.path, f)
+#			kalgo, kblob = self.parseSexp(open(path, "rb"))
+#			keys[kalgo, kblob] = []
+#		return keys
+#
+#	def save(self, keys):
+#		import hashlib
+#		storedKeys = set(os.listdir(self.path))
+#		currentKeys = set()
+#		for (kalgo, kblob), attrs in keys.items():
+#			exp = self.unparseSexp(kalgo, kblob, attrs)
+#			sha = hashlib.sha1(exp.canonical()).hexdigest()
+#			currentKeys.add(sha)
+#			if sha not in storedKeys:
+#				path = os.path.join(self.path, sha)
+#				open(path, "wb").write(exp.sexp())
+#
+#		for sha in storedKeys-currentKeys:
+#			path = os.path.join(self.path, sha)
+#			os.unlink(path)
+#
+#	def add(self, kalgo, kblob, attrs):
+#		import hashlib
+#		exp = self.unparseSexp(kalgo, kblob, attrs)
+#		sha = hashlib.sha1(exp.canonical()).hexdigest()
+#		path = os.path.join(self.path, sha)
+#		if os.path.exists(path):
+#			return vdproto.KEY_ALREADY_PRESENT
+#		else:
+#			open(path, "wb").write(exp.sexp())
+#			return vdproto.SUCCESS
+#
+#	def remove(self, kalgo, kblob):
+#		raise NotImplemented
+#
+#	@classmethod
+#	def parseSexp(self, expr):
+#		import sexp
+#		tree = sexp.Sexp(expr).tree
+#		assert tree[0] == "public-key"
+#		tree = tree[1]
+#		algo = tree[0]
+#		if algo == "rsa-pkcs1-sha1":
+#			kalgo = "ssh-rsa"
+#			n = tree.find("n").next()[1]
+#			e = tree.find("e").next()[1]
+#			# todo: SshProtocol class?
+#			string = lambda s: struct.pack("!L", len(s)) + s
+#			kblob = string("ssh-rsa") + string(e) + string(n)
+#		else:
+#			raise NotImplemented("unknown key type %s" % algo)
+#		return kalgo, kblob
+#
+#	@classmethod
+#	def unparseSexp(self, kalgo, kblob, attrs):
+#		import sexp
+#		from StringIO import StringIO
+#		buf = StringIO(kblob)
+#		if kalgo == "ssh-rsa":
+#			# TODO
+#			length, = struct.unpack("!L", buf.read(4))
+#			buf.read(length)
+#			length, = struct.unpack("!L", buf.read(4))
+#			e = buf.read(length)
+#			length, = struct.unpack("!L", buf.read(4))
+#			n = buf.read(length)
+#
+#			key = sexp.List()
+#			key.append(sexp.String("rsa-pkcs1-sha1"))
+#			key.append(sexp.List([sexp.String("n"), sexp.String(n)]))
+#			key.append(sexp.List([sexp.String("e"), sexp.String(e)]))
+#
+#		else:
+#			raise NotImplemented("keys of type %s not supported yet" % kalgo)
+#
+#		exp = sexp.List()
+#		exp.append(sexp.String("public-key"))
+#		exp.append(key)
+#		return exp
+#
+#	@classmethod
+#	def knows_attribute(self, name):
+#		return name in ("comment")
+# }}}
 
-			key = sexp.List()
-			key.append(sexp.String("rsa-pkcs1-sha1"))
-			key.append(sexp.List([sexp.String("n"), sexp.String(n)]))
-			key.append(sexp.List([sexp.String("e"), sexp.String(e)]))
-
-		else:
-			raise NotImplemented("keys of type %s not supported yet" % kalgo)
-
-		exp = sexp.List()
-		exp.append(sexp.String("public-key"))
-		exp.append(key)
-		return exp
-
-	@classmethod
-	def isKnownAttribute(self, name):
-		return name in ("comment")
-"""
-
-class sshproto():
+class sshproto(): # {{{
 	@classmethod
 	def read_uint32(self):
 		buf = sys.stdin.read(4)
@@ -349,58 +407,58 @@ class sshproto():
 				fmt += "L%ds" % len(d)
 				outdata += [len(d), d]
 		length = struct.calcsize(fmt)-4
-		log("out: %s data[%d]" % (repr(data[0]), length))
 		buf = struct.pack(fmt, length, *outdata)
 		sys.stdout.write(buf)
 		sys.stdout.flush()
-
+	
 	@classmethod
-	def send_status(self, code):
-		msg = vdproto.statuses.get(code, vdproto.GENERAL_FAILURE)
+	def send_status(self, code, msg):
 		self.send_packet("status", code, msg, "en_US")
+# }}}
 
-class vdproto():
-	SUCCESS			= 0
-	ACCESS_DENIED		= 1
-	STORAGE_EXCEEDED	= 2
-	VERSION_NOT_SUPPORTED	= 3
-	KEY_NOT_FOUND		= 4
-	KEY_NOT_SUPPORTED	= 5
-	KEY_ALREADY_PRESENT	= 6
-	GENERAL_FAILURE		= 7
-	REQUEST_NOT_SUPPORTED	= 8
-	ATTRIBUTE_NOT_SUPPORTED	= 9
+class PublicKeySubsystem(object):
+	SUCCESS                 = 0
+	ACCESS_DENIED           = 1
+	STORAGE_EXCEEDED        = 2
+	VERSION_NOT_SUPPORTED   = 3
+	KEY_NOT_FOUND           = 4
+	KEY_NOT_SUPPORTED       = 5
+	KEY_ALREADY_PRESENT     = 6
+	GENERAL_FAILURE         = 7
+	REQUEST_NOT_SUPPORTED   = 8
+	ATTRIBUTE_NOT_SUPPORTED = 9
 
 	statuses = {
-		SUCCESS:			"Success",
-		ACCESS_DENIED:			"Access denied",
-		VERSION_NOT_SUPPORTED:		"Protocol version not supported",
-		KEY_NOT_FOUND:			"Key not found",
-		KEY_NOT_SUPPORTED:		"Key type not supported",
-		KEY_ALREADY_PRESENT:		"Key already present",
-		GENERAL_FAILURE:		"General failure",
-		REQUEST_NOT_SUPPORTED:		"Request not supported",
-		ATTRIBUTE_NOT_SUPPORTED:	"Attribute not supported",
+		SUCCESS:                 "Success",
+		ACCESS_DENIED:           "Access denied",
+		VERSION_NOT_SUPPORTED:   "Protocol version not supported",
+		KEY_NOT_FOUND:           "Key not found",
+		KEY_NOT_SUPPORTED:       "Key type not supported",
+		KEY_ALREADY_PRESENT:     "Key already present",
+		GENERAL_FAILURE:         "General failure",
+		REQUEST_NOT_SUPPORTED:   "Request not supported",
+		ATTRIBUTE_NOT_SUPPORTED: "Attribute not supported",
 	}
 
-	@staticmethod
-	def list():
-		global keys
-		for kalgo, kblob, attrs in key_list():
+	def __init__(self):
+		self.keystore = None
+	
+	def recv_list(self):
+		for kalgo, kblob, attrs in self.keystore.list():
 			data = [kalgo, kblob, len(attrs)]
 			for attr in attrs:
 				data += attr["name"], attr["value"]
 			sshproto.send_packet("publickey", *data)
-		return self.SUCCESS
 
-	@staticmethod
-	def add():
-		global keys
+		return self.SUCCESS
+	
+	def recv_add(self):
 		kalgo = sshproto.read_string()
 		kblob = sshproto.read_string()
 		overwrite = sshproto.read_bool()
 		num_attrs = sshproto.read_uint32()
 		attrs = []
+
 		while num_attrs:
 			attrs.append({
 				"name": sshproto.read_string(),
@@ -408,52 +466,74 @@ class vdproto():
 				"critical": sshproto.read_bool(),
 			})
 			num_attrs -= 1
-		return key_add(kalgo, kblob, attrs, overwrite)
 
-	@staticmethod
-	def remove():
-		kalgo = read_string()
-		kblob = read_string()
-		return key_remove(kalgo, kblob)
+		if self.keystore.has_key(kalgo, kblob) and not overwrite:
+			return self.KEY_ALREADY_PRESENT
 
-	@staticmethod
-	def listattributes():
-		for a in KnownAttributes:
-			sshproto.send_packet("attribute", a, False)
+		for attr in attrs:
+			if attr["critical"] and not keystore.knows_attribute(attr["name"]):
+				return self.ATTRIBUTE_NOT_SUPPORTED
+
+		self.keystore.add(kalgo, kblob, attrs)
+
 		return self.SUCCESS
+	
+	def recv_remove(self):
+		kalgo = sshproto.read_string()
+		kblob = sshproto.read_string()
 
-def save_keys():
-	return keystore.write(keys)
+		if self.keystore.remove(kalgo, kblob):
+			return self.SUCCESS
+		else:
+			return self.KEY_NOT_FOUND
+	
+	def recv_listattributes(self):
+		for attr in KnownAttributes:
+			sshproto.send_packet("attribute", attr, False)
 
-def load_keys():
-	return keystore.read()
+		return self.SUCCESS
+	
+	def handle_message(self, name, datalen):
+		if name == "version":
+			ver = sshproto.read_uint32()
+			if ver == 2:
+				sshproto.send_packet("version", 2)
+				return True, None
+			else:
+				return False, self.VERSION_NOT_SUPPORTED
+		elif name == "list":
+			return True, self.recv_list()
+		elif name == "add":
+			return True, self.recv_add()
+		elif name == "remove":
+			return True, self.recv_remove()
+		elif name == "listattributes":
+			return True, self.recv_listattributes()
+		else:
+			sys.stdin.read(datalen)
+			return True, self.REQUEST_NOT_SUPPORTED
 
-def key_list():
-	global keys
-	for (kalgo, kblob), attrs in keys.items():
-		yield kalgo, kblob, attrs
+	def loop(self):
+		while True:
+			name, datalen = sshproto.read_packet()
+			ok, code = self.handle_message(name, datalen)
+			if code is not None:
+				msg = self.statuses.get(code, self.GENERAL_FAILURE)
+				sshproto.send_status(code, msg)
+			if not ok:
+				break
 
-def key_add(kalgo, kblob, attrs, overwrite=True):
-	global keys
-	if (kalgo, kblob) in keys and not overwrite:
-		return vdproto.KEY_ALREADY_PRESENT
-	for attr in attrs:
-		if attr["critical"] and not keystore.isKnownAttribute(attr["name"]):
-			return vdproto.ATTRIBUTE_NOT_SUPPORTED
-	keys[kalgo, kblob] = attrs
-	return vdproto.SUCCESS
+	def run(self):
+		try:
+			self.loop()
+		except IOError as e:
+			trace("exception: %r" % e)
+			sys.exit()
 
-def key_remove(kalgo, kblob):
-	global keys
-	if (kalgo, kblob) in keys:
-		del keys[kalgo, kblob]
-		return vdproto.SUCCESS
-	else:
-		return vdproto.KEY_NOT_FOUND
-
-def log(text):
+def trace(text):
 	print(text, file=sys.stderr)
 	sys.stderr.flush()
+
 def is_interactive():
 	try:
 		return os.isatty(sys.stdin.fileno())
@@ -461,42 +541,14 @@ def is_interactive():
 		return false
 
 if is_interactive():
-	print("This tool is intended to be run as a SSH subsystem, not in interactive session.",
-		file=sys.stderr)
+	trace("This tool is intended to be run as a SSH subsystem, not in interactive session.")
 	sys.exit(2)
 
-log_file = tempfile.NamedTemporaryFile(
-	mode="w", prefix="publickey", suffix=".log", delete=False)
+log_file = open("/tmp/publickey-%d.trace" % os.getuid(), "a")
+
 sys.stderr = log_file
 
-keystore = OpenSSHKeystore()
-
-try:
-	while True:
-		name, datalen = sshproto.read_packet()
-		log("in: %s data[%d]" % (repr(name), datalen))
-		if name == "version":
-			ver = read_uint32()
-			log("version = %d" % ver)
-			if ver == 2:
-				sshproto.send_packet("version", 2)
-			else:
-				sshproto.send_status(vdproto.VERSION_NOT_SUPPORTED)
-				sys.exit()
-		elif name == "list":
-			sshproto.send_status(vdproto.list())
-			pass
-		elif name == "add":
-			sshproto.send_status(vdproto.add())
-		elif name == "remove":
-			sshproto.send_status(vdproto.remove())
-		elif name == "listattributes":
-			sshproto.send_status(vdproto.listattributes())
-		else:
-			log("discarding %d" % datalen)
-			sys.stdin.read(datalen)
-			sshproto.send_status(vdproto.REQUEST_NOT_SUPPORTED)
-except IOError:
-	save_keys()
-	log_file.delete = True
-	sys.exit()
+pks = PublicKeySubsystem()
+pks.keystore = OpenSSHKeystore()
+#pks.keystore = YamlKeystore()
+pks.run()
