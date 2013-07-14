@@ -6,8 +6,6 @@
 # for line in open("authorized_keys"):
 #     if line and not line.startswith("#"):
 #         yield PublicKey(line.strip())
-#
-# Todo: move PublicKey.split_options -> PublicKeyOptions.__init__()
 
 import base64
 import hashlib
@@ -23,11 +21,12 @@ class PublicKeyOptions(list):
 		return ",".join(o)
 	
 	@classmethod
-	def from_string(klass, text):
+	def parse(klass, text):
 		keys = []
 		values = []
 		current = ""
 		state = "key"
+
 		for char in text:
 			if state == "key":
 				if char == ",":
@@ -62,29 +61,30 @@ class PublicKeyOptions(list):
 			elif state == "value dquote escape":
 				current += char
 				state = "value dquote"
-		if state == "key":
-			keys.append(current)
-			values.append(True)
-		else:
-			values.append(current)
+
+		if current:
+			if state == "key":
+				keys.append(current)
+				values.append(True)
+			else:
+				values.append(current)
+
 		return klass(zip(keys, values))
 
 class PublicKey(object):
 	def __init__(self, line=None):
-		if line is None:
-			self._options = []
-			self.algo = None
-			self.blob = None
-			self.prefix = None
-			self.comment = None
+		if line:
+			tokens = self.parse(line)
 		else:
-			sline = PublicKey.split_line(line)
-			self.prefix, self.algo, self.blob, self.comment = sline
-			self._options = PublicKey.split_options(self.prefix)
-		self.options = PublicKeyOptions(self._options)
+			tokens = [None, None, None, None]
+
+		self.prefix, self.algo, self.blob, self.comment = tokens
+
+		self.options = PublicKeyOptions.parse(self.prefix)
 	
 	def __repr__(self):
-		return "<PublicKey algo=%r prefix=%r comment=%r>" % (self.algo, self.prefix, self.comment)
+		return "<PublicKey prefix=%r algo=%r comment=%r>" % \
+			(self.prefix, self.algo, self.comment)
 	
 	def __str__(self):
 		options = self.options
@@ -105,10 +105,11 @@ class PublicKey(object):
 		return m.hexdigest() if hex else m.digest()
 
 	@classmethod
-	def split_line(self, line):
+	def parse(self, line):
 		tokens = []
 		current = ""
 		state = "normal"
+
 		for char in line:
 			old = state
 			if state == "normal":
@@ -132,20 +133,34 @@ class PublicKey(object):
 			elif state == "dquote escape":
 				current += char
 				state = "dquote"
-		tokens.append(current)
+
+		if current:
+			tokens.append(current)
 		
 		if tokens[0] in {"ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256",
 				"ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}:
-			options = []
+			prefix = ""
 		else:
-			options = tokens.pop(0)
+			prefix = tokens.pop(0)
 		algo = tokens[0]
 		blob = tokens[1]
+		blob = base64.b64decode(blob.encode("utf-8"))
 		comment = " ".join(tokens[2:])
 
-		blob = base64.b64decode(blob.encode("utf-8"))
-		return options, algo, blob, comment
+		return prefix, algo, blob, comment
 
-	@classmethod
-	def split_options(self, string):
-		return PublicKeyOptions.from_string(string)
+if __name__ == "__main__":
+	import os
+
+	path = os.path.expanduser("~/.ssh/authorized_keys")
+
+	for line in open(path, "r"):
+		line = line.strip()
+		if line and not line.startswith("#"):
+			key = PublicKey(line)
+			print("key = %r" % key)
+			print("prefix = %r" % key.prefix)
+			print("algo = %r" % key.algo)
+			print("comment = %r" % key.comment)
+			print("options = %r" % key.options)
+			print()
