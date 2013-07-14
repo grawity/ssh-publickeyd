@@ -76,7 +76,7 @@ class PublicKey(object):
 		if line:
 			tokens = self.parse(line)
 		else:
-			tokens = [None, None, None, None]
+			tokens = ["", None, None, None]
 
 		self.prefix, self.algo, self.blob, self.comment = tokens
 
