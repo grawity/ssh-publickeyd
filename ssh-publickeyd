@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 # vim: ts=4:sw=4
 # Server-side of SecureCRT's "public key assistant" subsystem,
 # as defined in RFC 4819.
@@ -26,13 +26,14 @@
 #
 #   2. Reload `sshd`
 
-from __future__ import print_function
 import os, sys
 import tempfile
 import struct
 
-sys.path.append(os.path.expanduser("~/code/lib/python"))
-import nullroute.authorized_keys as authorized_key
+import authorized_keys
+
+def trace(*args):
+	print(*args, file=sys.stderr)
 
 class Keystore(object):
 	pass
@@ -133,7 +134,7 @@ class OpenSSHKeystore(Keystore): # {{{
 					"critical": False,
 				})
 			else:
-				key = authorized_key.PublicKey(line)
+				key = authorized_keys.PublicKey(line)
 				attrs = self.convopt_openssh_to_vandyke(key.options)
 				if len(key.comment):
 					attrs.append({
@@ -152,7 +153,7 @@ class OpenSSHKeystore(Keystore): # {{{
 				self._append_key(fh, kalgo, kblob, attrs)
 
 	def _append_key(self, fh, kalgo, kblob, attrs):
-		key = authorized_key.PublicKey()
+		key = authorized_keys.PublicKey()
 		key.algo = kalgo
 		key.blob = kblob
 		for attr in attrs:
@@ -170,7 +171,7 @@ class OpenSSHKeystore(Keystore): # {{{
 				print("# attr: %(name)s=%(value)s" % attr, file=fh)
 		print(key, file=fh)
 		print("", file=fh)
-	
+
 	def list(self):
 		keys = self.load()
 
@@ -237,7 +238,7 @@ class OpenSSHKeystore(Keystore): # {{{
 
 	@staticmethod
 	def convopt_vandyke_to_openssh(in_attrs):
-		out_opts = authorized_key.PublicKeyOptions()
+		out_opts = authorized_keys.PublicKeyOptions()
 		unknown_attrs = []
 
 		for attr in in_attrs:
@@ -359,61 +360,75 @@ class OpenSSHKeystore(Keystore): # {{{
 #		return name in ("comment")
 # }}}
 
-class sshproto(): # {{{
-	@classmethod
-	def read_uint32(self):
-		buf = sys.stdin.read(4)
-		if not buf:
-			raise IOError
-		num, = struct.unpack("!L", buf)
-		return num
+class SshEndOfStream(Exception):
+	pass
 
-	@classmethod
-	def read_bool(self):
-		buf = sys.stdin.read(1)
+class SshStream(object):
+	def __init__(self, inputfd, outputfd=None):
+		self.inputfd = inputfd
+		self.outputfd = outputfd or inputfd
+
+	def read(self, *args):
+		buf = self.inputfd.read(*args)
 		if not buf:
-			raise IOError
+			raise SshEndOfStream
+		return buf
+
+	def write(self, *args):
+		return self.outputfd.write(*args)
+
+	def writef(self, *args):
+		r = self.write(*args)
+		if r:
+			r = self.outputfd.flush()
+		return r
+
+	def read_u32(self):
+		buf = self.read(4)
+		val, = struct.unpack("!L", buf)
+		return val
+
+	def read_bool(self):
+		buf = self.read(1)
 		val, = struct.unpack("!?", buf)
 		return val
 
-	@classmethod
 	def read_string(self):
-		buf = sys.stdin.read(4)
-		if not buf:
-			raise IOError
-		length, = struct.unpack("!L", buf)
-		buf = sys.stdin.read(length)
+		length = self.read_u32()
+		buf = self.read(length)
 		return buf
 
-	@classmethod
 	def read_packet(self):
-		length = self.read_uint32()
+		packet_length = self.read_u32()
 		name = self.read_string()
-		datalen = length-(4+len(name))
-		return name, datalen
+		data_length = packet_length - (4 + len(name))
+		return name, data_length
 
-	@classmethod
-	def send_packet(self, *data):
+	def write_packet(self, *data):
 		fmt = "!L"
-		outdata = []
-		for d in data:
-			if isinstance(d, int):
+		packed = []
+		for datum in data:
+			if isinstance(datum, int):
 				fmt += "L"
-				outdata += [d]
-			elif isinstance(d, bool):
+				packed += [datum]
+			elif isinstance(datum, bool):
 				fmt += "?"
-				outdata += [d]
-			elif isinstance(d, str):
-				fmt += "L%ds" % len(d)
-				outdata += [len(d), d]
-		length = struct.calcsize(fmt)-4
-		buf = struct.pack(fmt, length, *outdata)
-		sys.stdout.write(buf)
-		sys.stdout.flush()
-	
-	@classmethod
-	def send_status(self, code, msg):
-		self.send_packet("status", code, msg, "en_US")
+				packed += [datum]
+			elif isinstance(datum, str):
+				buf = datum.encode("utf-8")
+				fmt += "L%ds" % len(buf)
+				packed += [len(buf), buf]
+			elif isinstance(datum, bytes):
+				fmt += "L%ds" % len(datum)
+				packed += [len(datum), datum]
+			else:
+				trace("write_packet(): unknown type %r of %r" % (type(datum), datum))
+		data_length = struct.calcsize(fmt) - 4
+		buf = struct.pack(fmt, data_length, *packed)
+		self.writef(buf)
+
+	def write_status(self, code, msg):
+		self.write_packet("status", code, msg, "en_US")
 # }}}
 
 class PublicKeySubsystem(object):
@@ -440,30 +455,33 @@ class PublicKeySubsystem(object):
 		ATTRIBUTE_NOT_SUPPORTED: "Attribute not supported",
 	}
 
-	def __init__(self):
+	fatal_codes = { VERSION_NOT_SUPPORTED }
+
+	def __init__(self, stream):
 		self.keystore = None
-	
+		self.stream = stream
+
 	def recv_list(self):
 		for kalgo, kblob, attrs in self.keystore.list():
 			data = [kalgo, kblob, len(attrs)]
 			for attr in attrs:
 				data += attr["name"], attr["value"]
-			sshproto.send_packet("publickey", *data)
+			self.stream.write_packet("publickey", *data)
 
 		return self.SUCCESS
-	
+
 	def recv_add(self):
-		kalgo = sshproto.read_string()
-		kblob = sshproto.read_string()
-		overwrite = sshproto.read_bool()
-		num_attrs = sshproto.read_uint32()
+		kalgo = self.stream.read_string()
+		kblob = self.stream.read_string()
+		overwrite = self.stream.read_bool()
+		num_attrs = self.stream.read_u32()
 		attrs = []
 
 		while num_attrs:
 			attrs.append({
-				"name": sshproto.read_string(),
-				"value": sshproto.read_string(),
-				"critical": sshproto.read_bool(),
+				"name": self.stream.read_string(),
+				"value": self.stream.read_string(),
+				"critical": self.stream.read_bool(),
 			})
 			num_attrs -= 1
 
@@ -477,62 +495,59 @@ class PublicKeySubsystem(object):
 		self.keystore.add(kalgo, kblob, attrs)
 
 		return self.SUCCESS
-	
+
 	def recv_remove(self):
-		kalgo = sshproto.read_string()
-		kblob = sshproto.read_string()
+		kalgo = self.stream.read_string()
+		kblob = self.stream.read_string()
 
 		if self.keystore.remove(kalgo, kblob):
 			return self.SUCCESS
 		else:
 			return self.KEY_NOT_FOUND
-	
+
 	def recv_listattributes(self):
 		for attr in KnownAttributes:
-			sshproto.send_packet("attribute", attr, False)
+			self.stream.write_packet("attribute", attr, False)
 
 		return self.SUCCESS
-	
-	def handle_message(self, name, datalen):
-		if name == "version":
-			ver = sshproto.read_uint32()
+
+	def handle_message(self, name, data_length):
+		if name == b"version":
+			ver = self.stream.read_u32()
 			if ver == 2:
-				sshproto.send_packet("version", 2)
-				return True, None
+				self.stream.write_packet("version", ver)
+				return None
 			else:
-				return False, self.VERSION_NOT_SUPPORTED
-		elif name == "list":
-			return True, self.recv_list()
-		elif name == "add":
-			return True, self.recv_add()
-		elif name == "remove":
-			return True, self.recv_remove()
-		elif name == "listattributes":
-			return True, self.recv_listattributes()
+				return self.VERSION_NOT_SUPPORTED
+		elif name == b"list":
+			return self.recv_list()
+		elif name == b"add":
+			return self.recv_add()
+		elif name == b"remove":
+			return self.recv_remove()
+		elif name == b"listattributes":
+			return self.recv_listattributes()
 		else:
-			sys.stdin.read(datalen)
-			return True, self.REQUEST_NOT_SUPPORTED
+			trace("received unknown message %r [%r bytes]" % (name, data_length))
+			sys.stdin.read(data_length)
+			return self.REQUEST_NOT_SUPPORTED
 
 	def loop(self):
 		while True:
-			name, datalen = sshproto.read_packet()
-			ok, code = self.handle_message(name, datalen)
+			name, data_length = self.stream.read_packet()
+			code = self.handle_message(name, data_length)
 			if code is not None:
 				msg = self.statuses.get(code, self.GENERAL_FAILURE)
-				sshproto.send_status(code, msg)
-			if not ok:
-				break
+				self.stream.write_status(code, msg)
+				if code in self.fatal_codes:
+					break
 
 	def run(self):
 		try:
 			self.loop()
-		except IOError as e:
-			trace("exception: %r" % e)
+		except SshEndOfStream:
+			trace("end of stream")
 			sys.exit()
-
-def trace(text):
-	print(text, file=sys.stderr)
-	sys.stderr.flush()
 
 def is_interactive():
 	try:
@@ -541,14 +556,17 @@ def is_interactive():
 		return false
 
 if is_interactive():
-	trace("This tool is intended to be run as a SSH subsystem, not in interactive session.")
+	trace("This tool is intended to be run as a SSH subsystem, not interactively.")
 	sys.exit(2)
 
-log_file = open("/tmp/publickey-%d.trace" % os.getuid(), "a")
+os.umask(0o077)
+sys.stdin = open("/dev/stdin", "rb")
+sys.stdout = open("/dev/stdout", "wb")
+sys.stderr = open("/tmp/publickey-%d.trace" % os.getuid(), "a")
 
-sys.stderr = log_file
+stream = SshStream(sys.stdin, sys.stdout)
 
-pks = PublicKeySubsystem()
+pks = PublicKeySubsystem(stream)
 pks.keystore = OpenSSHKeystore()
 #pks.keystore = YamlKeystore()
 pks.run()
