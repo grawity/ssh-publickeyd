@@ -9,6 +9,7 @@
 
 import base64
 import hashlib
+import struct
 
 class PublicKeyOptions(list):
     def __str__(self):
@@ -137,23 +138,32 @@ class PublicKey(object):
         if current:
             tokens.append(current)
 
-        # can't reliably distinguish options and keytype, apparently, so
-        # whitelisting known types is necessary (unless we try looking for the
-        # first token that starts with 'AAAA', or perhaps even
-        # 'AAAA'+base64(prev_token), but that's sort of ugly)
+        # the only way of reliably distinguishing between options and key types
+        # is to check whether the following token starts with a base64-encoded
+        # length + type, and return the previous token on first match.
 
-        # key types/algos seen so far:
-        # - ssh-(dss|ed25519|rsa)
-        # - ecdsa-sha2-nistp(256|384|521)
-        # - x509-sign-rsa
-        if tokens[0].startswith(("ssh-", "ecdsa-", "x509-sign-")):
-            prefix = ""
-        else:
-            prefix = tokens.pop(0)
-        algo = tokens[0]
-        blob = tokens[1]
+        algo_pos = None
+        last_token = None
+
+        for pos, token in enumerate(tokens):
+            token = token.encode("utf-8")
+            # assume there isn't going to be a type longer than 255 bytes
+            if pos > 0 and token.startswith(b"AAAA"):
+                prefix = struct.pack("!Is", len(last_token), last_token)
+                token = base64.b64decode(token)
+                if token.startswith(prefix):
+                    algo_pos = pos - 1
+                    break
+            last_token = token
+
+        if algo_pos is None:
+            raise ValueError("key blob not found (incorrect type?)")
+
+        prefix = " ".join(tokens[0:algo_pos])
+        algo = tokens[algo_pos]
+        blob = tokens[algo_pos+1]
         blob = base64.b64decode(blob.encode("utf-8"))
-        comment = " ".join(tokens[2:])
+        comment = " ".join(tokens[algo_pos+2:])
 
         return prefix, algo, blob, comment
 
