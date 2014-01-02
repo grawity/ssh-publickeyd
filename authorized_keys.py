@@ -137,8 +137,16 @@ class PublicKey(object):
         if current:
             tokens.append(current)
 
-        if tokens[0] in {"ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256",
-                "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}:
+        # can't reliably distinguish options and keytype, apparently, so
+        # whitelisting known types is necessary (unless we try looking for the
+        # first token that starts with 'AAAA', or perhaps even
+        # 'AAAA'+base64(prev_token), but that's sort of ugly)
+
+        # key types/algos seen so far:
+        # - ssh-(dss|ed25519|rsa)
+        # - ecdsa-sha2-nistp(256|384|521)
+        # - x509-sign-rsa
+        if tokens[0].startswith(("ssh-", "ecdsa-", "x509-sign-")):
             prefix = ""
         else:
             prefix = tokens.pop(0)
