@@ -175,10 +175,14 @@ if __name__ == "__main__":
     for line in open(path, "r"):
         line = line.strip()
         if line and not line.startswith("#"):
-            key = PublicKey(line)
-            print("key = %r" % key)
-            print("prefix = %r" % key.prefix)
-            print("algo = %r" % key.algo)
-            print("comment = %r" % key.comment)
-            print("options = %r" % key.options)
+            print("line = %r" % line)
+            try:
+                key = PublicKey(line)
+                print("* key = %r" % key)
+                print("  - prefix = %r" % key.prefix)
+                print("  - algo = %r" % key.algo)
+                print("  - comment = %r" % key.comment)
+                print("  - options = %r" % key.options)
+            except ValueError as e:
+                print("* failure = %r" % e)
             print()
