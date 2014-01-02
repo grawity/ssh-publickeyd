@@ -73,9 +73,9 @@ class PublicKeyOptions(list):
         return klass(zip(keys, values))
 
 class PublicKey(object):
-    def __init__(self, line=None):
+    def __init__(self, line=None, strict_algo=True):
         if line:
-            tokens = self.parse(line)
+            tokens = self.parse(line, strict_algo)
         else:
             tokens = ["", None, None, None]
 
@@ -106,7 +106,7 @@ class PublicKey(object):
         return m.hexdigest() if hex else m.digest()
 
     @classmethod
-    def parse(self, line):
+    def parse(self, line, strict_algo=True):
         tokens = []
         current = ""
         state = "normal"
@@ -145,16 +145,22 @@ class PublicKey(object):
         algo_pos = None
         last_token = None
 
-        for pos, token in enumerate(tokens):
-            token = token.encode("utf-8")
-            # assume there isn't going to be a type longer than 255 bytes
-            if pos > 0 and token.startswith(b"AAAA"):
-                prefix = struct.pack("!Is", len(last_token), last_token)
-                token = base64.b64decode(token)
-                if token.startswith(prefix):
-                    algo_pos = pos - 1
+        if strict_algo:
+            for pos, token in enumerate(tokens):
+                token = token.encode("utf-8")
+                # assume there isn't going to be a type longer than 255 bytes
+                if pos > 0 and token.startswith(b"AAAA"):
+                    prefix = struct.pack("!Is", len(last_token), last_token)
+                    token = base64.b64decode(token)
+                    if token.startswith(prefix):
+                        algo_pos = pos - 1
+                        break
+                last_token = token
+        else:
+            for pos, token in enumerate(tokens):
+                if token.startswith(("ssh-", "ecdsa-", "x509-sign-")):
+                    algo_pos = pos
                     break
-            last_token = token
 
         if algo_pos is None:
             raise ValueError("key blob not found (incorrect type?)")
