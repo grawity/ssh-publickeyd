@@ -1,11 +1,7 @@
-# parser for OpenSSH authorized_keys files
-# vim: ft=python
-
-# State-machine-based parser for OpenSSH authorized_keys files.
+# Parser for OpenSSH authorized_keys files
 #
-# for line in open("authorized_keys"):
-#     if line and not line.startswith("#"):
-#         yield PublicKey(line.strip())
+# (c) Mantas Mikulėnas <grawity@gmail.com>
+# Released under WTFPL v2 <http://sam.zoy.org/wtfpl/>
 
 import base64
 import hashlib
@@ -192,3 +188,5 @@ if __name__ == "__main__":
             except ValueError as e:
                 print("* failure = %r" % e)
             print()
+
+# vim: ft=python
