@@ -171,8 +171,12 @@ class PublicKey(object):
 
 if __name__ == "__main__":
     import os
+    import sys
 
-    path = os.path.expanduser("~/.ssh/authorized_keys")
+    try:
+        path = sys.argv[1]
+    except IndexError:
+        path = os.path.expanduser("~/.ssh/authorized_keys")
 
     for line in open(path, "r"):
         line = line.strip()
