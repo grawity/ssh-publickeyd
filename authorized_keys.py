@@ -69,7 +69,7 @@ class PublicKeyOptions(list):
         return klass(zip(keys, values))
 
 class PublicKey(object):
-    def __init__(self, line=None, strict_algo=True):
+    def __init__(self, line=None, strict_algo=True, host_prefix=False):
         if line:
             tokens = self.parse(line, strict_algo)
         else:
@@ -77,7 +77,10 @@ class PublicKey(object):
 
         self.prefix, self.algo, self.blob, self.comment = tokens
 
-        self.options = PublicKeyOptions.parse(self.prefix)
+        if host_prefix:
+            self.hosts = self.prefix.split(",")
+        else:
+            self.options = PublicKeyOptions.parse(self.prefix)
 
     def __repr__(self):
         return "<PublicKey prefix=%r algo=%r comment=%r>" % \
