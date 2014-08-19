@@ -1,6 +1,16 @@
 # Parser for OpenSSH authorized_keys files
 #
-# (c) Mantas Mikulėnas <grawity@gmail.com>
+# Features:
+#  - supports OpenSSH prefixed options
+#  - supports comments with spaces
+#  - recognizes all SSHv2 key types
+# Bugs:
+#  - doesn't attempt to parse SSHv1 keys
+#
+# Test case:
+#   ssh-lulz="echo \"Here's ssh-rsa for you\"" future-algo AAAAC2Z1dHVyZS1hbGdv X y z.
+#
+# (c) 2010-2014 Mantas Mikulėnas <grawity@gmail.com>
 # Released under WTFPL v2 <http://sam.zoy.org/wtfpl/>
 
 import base64
@@ -162,6 +172,7 @@ class PublicKey(object):
                     break
 
         if algo_pos is None:
+            # this might be a SSHv1 key; fuck that.
             raise ValueError("key blob not found (incorrect type?)")
 
         prefix = " ".join(tokens[0:algo_pos])
