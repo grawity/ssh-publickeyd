@@ -8,6 +8,10 @@
 #
 #     Data types: http://tools.ietf.org/html/rfc4251#section-5
 #
+# Future:
+#
+#     http://tools.ietf.org/html/rfc7076
+#
 # Requirements:
 #
 #   - lib/authorized_keys.py from the same gitrepo
