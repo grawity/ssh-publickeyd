@@ -18,7 +18,7 @@
 #
 # Configuring OpenSSHd:
 #
-#   1. Add the following to /etc/ssh/sshd_config
+#   1. Add the following to /etc/ssh/sshd_config:
 #
 #        Subsystem publickey             /usr/local/bin/rfc4819
 #        Subsystem publickey@vandyke.com /usr/local/bin/rfc4819
@@ -30,6 +30,14 @@
 #   1. Run `ssh -s myserver.example.com publickey` to invoke the subsystem
 #
 #   2. Speak the protocol over stdin/stdout
+#
+#   http://www.chiark.greenend.org.uk/~sgtatham/putty/wishlist/subsystem-publickey.html
+#
+# Known clients:
+#
+#   - VanDyke SecureCRT (tested)
+#   - Bitvise Tunnelier (untested)
+#   - Multinet SSH (didn't work at all)
 
 import os, sys
 import tempfile
