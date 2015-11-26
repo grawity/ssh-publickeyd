@@ -14,11 +14,7 @@
 #
 # Requirements:
 #
-#   - lib/authorized_keys.py from the same gitrepo
-#
-#   - python-yaml, but only if YamlKeystore is being used.
-#     (You don't need it, so just comment out "import yaml" below.
-#     I'm too lazy to do it myself.)
+#     https://github.com/grawity/code/blob/master/lib/python/nullroute/authorized_keys.py
 #
 # Configuring OpenSSHd:
 #
@@ -27,7 +23,13 @@
 #        Subsystem publickey             /usr/local/bin/rfc4819
 #        Subsystem publickey@vandyke.com /usr/local/bin/rfc4819
 #
-#   2. Reload `sshd`
+#   2. Reload sshd
+#
+# If you want to write a client:
+#
+#   1. Run `ssh -s myserver.example.com publickey` to invoke the subsystem
+#
+#   2. Speak the protocol over stdin/stdout
 
 import os, sys
 import tempfile
@@ -41,7 +43,7 @@ def trace(*args):
 class Keystore(object):
     pass
 
-class YamlKeystore(Keystore):
+class DebugYamlKeystore(Keystore):
     def __init__(self, path=None):
         import yaml
 
@@ -571,5 +573,5 @@ stream = SshStream(sys.stdin, sys.stdout)
 
 pks = PublicKeySubsystem(stream)
 pks.keystore = OpenSSHKeystore()
-#pks.keystore = YamlKeystore()
+#pks.keystore = DebugYamlKeystore()
 pks.run()
