@@ -31,13 +31,18 @@ class PublicKeyOptions(list):
 
     @classmethod
     def parse(klass, text):
+        STATE_KEY                   = 0
+        STATE_VALUE                 = 1
+        STATE_VALUE_DQUOTE          = 2
+        STATE_VALUE_DQUOTE_ESCAPE   = 3
+
         keys = []
         values = []
         current = ""
-        state = "key"
+        state = STATE_KEY
 
         for char in text:
-            if state == "key":
+            if state == STATE_KEY:
                 if char == ",":
                     keys.append(current)
                     values.append(True)
@@ -45,34 +50,34 @@ class PublicKeyOptions(list):
                 elif char == "=":
                     keys.append(current)
                     current = ""
-                    state = "value"
+                    state = STATE_VALUE
                 else:
                     current += char
-            elif state == "value":
+            elif state == STATE_VALUE:
                 if char == ",":
                     values.append(current)
                     current = ""
-                    state = "key"
+                    state = STATE_KEY
                 elif char == "\"":
                     current += char
-                    state = "value dquote"
+                    state = STATE_VALUE_DQUOTE
                 else:
                     current += char
-            elif state == "value dquote":
+            elif state == STATE_VALUE_DQUOTE:
                 if char == "\"":
                     current += char
-                    state = "value"
+                    state = STATE_VALUE
                 elif char == "\\":
                     current += char
-                    state = "value dquote escape"
+                    state = STATE_VALUE_DQUOTE_ESCAPE
                 else:
                     current += char
-            elif state == "value dquote escape":
+            elif state == STATE_VALUE_DQUOTE_ESCAPE:
                 current += char
-                state = "value dquote"
+                state = STATE_VALUE_DQUOTE
 
         if current:
-            if state == "key":
+            if state == STATE_KEY:
                 keys.append(current)
                 values.append(True)
             else:
@@ -118,33 +123,37 @@ class PublicKey(object):
 
     @classmethod
     def parse(self, line, strict_algo=True):
+        STATE_NORMAL        = 0
+        STATE_DQUOTE        = 1
+        STATE_DQUOTE_ESCAPE = 2
+
         tokens = []
         current = ""
-        state = "normal"
+        state = STATE_NORMAL
 
         for char in line:
             old = state
-            if state == "normal":
+            if state == STATE_NORMAL:
                 if char in " \t":
                     tokens.append(current)
                     current = ""
                 elif char == "\"":
                     current += char
-                    state = "dquote"
+                    state = STATE_DQUOTE
                 else:
                     current += char
-            elif state == "dquote":
+            elif state == STATE_DQUOTE:
                 if char == "\"":
                     current += char
-                    state = "normal"
+                    state = STATE_NORMAL
                 elif char == "\\":
                     current += char
-                    state = "dquote escape"
+                    state = STATE_DQUOTE_ESCAPE
                 else:
                     current += char
-            elif state == "dquote escape":
+            elif state == STATE_DQUOTE_ESCAPE:
                 current += char
-                state = "dquote"
+                state = STATE_DQUOTE
 
         if current:
             tokens.append(current)
