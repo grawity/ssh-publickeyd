@@ -3,17 +3,17 @@
 # Features:
 #  - supports OpenSSH prefixed options
 #  - supports comments with spaces
-#  - recognizes all SSHv2 key types
+#  - recognizes all possible SSHv2 key types
+#  - doesn't attempt to parse SSHv1 keys
+#
 # Bugs:
 #  - doesn't attempt to parse SSHv1 keys
 #
 # Test case:
-#   ssh-lulz="echo \"Here's ssh-rsa for you\"" future-algo AAAAC2Z1dHVyZS1hbGdv X y z.
+#   ssh-foo="echo \"Here's ssh-rsa for you\"" future-algo AAAAC2Z1dHVyZS1hbGdv X y z.
 #
-# (c) 2010-2014 Mantas Mikulėnas <grawity@gmail.com>
+# (c) 2010-2015 Mantas Mikulėnas <grawity@gmail.com>
 # Released under the MIT Expat License (dist/LICENSE.expat)
-#
-# Also, obligatory http://xkcd.com/1421/ link.
 
 import base64
 import hashlib
@@ -95,13 +95,15 @@ class PublicKey(object):
         self.prefix, self.algo, self.blob, self.comment = tokens
 
         if host_prefix:
+            # expect known_hosts format
             self.hosts = self.prefix.split(",")
         else:
+            # expect authorized_keys format
             self.options = PublicKeyOptions.parse(self.prefix)
 
     def __repr__(self):
         return "<PublicKey prefix=%r algo=%r comment=%r>" % \
-            (self.prefix, self.algo, self.comment)
+               (self.prefix, self.algo, self.comment)
 
     def __str__(self):
         options = self.options
@@ -163,9 +165,9 @@ class PublicKey(object):
         # length + type, and return the previous token on first match.
 
         algo_pos = None
-        last_token = None
 
         if strict_algo:
+            last_token = None
             for pos, token in enumerate(tokens):
                 token = token.encode("utf-8")
                 # assume there isn't going to be a type longer than 255 bytes
