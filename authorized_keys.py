@@ -1,19 +1,17 @@
 # Parser for OpenSSH authorized_keys files
+# (c) 2010-2015 Mantas Mikulėnas <grawity@gmail.com>
+# Released under the MIT License (dist/LICENSE.mit)
 #
 # Features:
-#  - supports OpenSSH prefixed options
+#  - supports OpenSSH options (with and without value)
 #  - supports comments with spaces
-#  - recognizes all possible SSHv2 key types
-#  - doesn't attempt to parse SSHv1 keys
+#  - recognizes all possible (current and future) SSHv2 key types
 #
-# Bugs:
+# Not bugs:
 #  - doesn't attempt to parse SSHv1 keys
 #
 # Test case:
 #   ssh-foo="echo \"Here's ssh-rsa for you\"" future-algo AAAAC2Z1dHVyZS1hbGdv X y z.
-#
-# (c) 2010-2015 Mantas Mikulėnas <grawity@gmail.com>
-# Released under the MIT Expat License (dist/LICENSE.expat)
 
 import base64
 import hashlib

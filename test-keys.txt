@@ -15,7 +15,7 @@ ecdsa-sha2-1.3.132.0.10 AAAAF2VjZHNhLXNoYTItMS4zLjEzMi4wLjEwAAAADDEuMy4xMzIuMC4x
 # EdDSA (Ed25519 curve, using OpenSSH)
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAd6Kuf1E7mjX3vo2tlrRn40bYoH6fyLWm5KY5tQVYR0 Ed25519 (OpenSSH)
 
-# Garbage
+# Nonsense, but syntactically valid
 ssh-foo="echo \"Here's ssh-rsa for you\"",ssh-quux future-algo AAAAC2Z1dHVyZS1hbGdv X y z.
 
 # end
