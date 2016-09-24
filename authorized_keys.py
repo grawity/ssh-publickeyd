@@ -1,5 +1,5 @@
 # Parser for OpenSSH authorized_keys files
-# (c) 2010-2015 Mantas Mikulėnas <grawity@gmail.com>
+# (c) 2010-2016 Mantas Mikulėnas <grawity@gmail.com>
 # Released under the MIT License (dist/LICENSE.mit)
 #
 # Features:
@@ -84,11 +84,11 @@ class PublicKeyOptions(list):
         return klass(zip(keys, values))
 
 class PublicKey(object):
-    def __init__(self, line=None, strict_algo=True, host_prefix=False):
+    def __init__(self, line=None, host_prefix=False):
         if line:
-            tokens = self.parse(line, strict_algo)
+            tokens = self.parse(line)
         else:
-            tokens = ["", None, None, None]
+            tokens = ("", None, None, None)
 
         self.prefix, self.algo, self.blob, self.comment = tokens
 
@@ -122,17 +122,19 @@ class PublicKey(object):
         return m.hexdigest() if hex else m.digest()
 
     @classmethod
-    def parse(self, line, strict_algo=True):
+    def parse(self, line):
         STATE_NORMAL        = 0
         STATE_DQUOTE        = 1
         STATE_DQUOTE_ESCAPE = 2
 
         tokens = []
+
+        # Split into space-separated tokens, taking into account quoted spaces
+        # in the OpenSSH 'options' prefix.
+
         current = ""
         state = STATE_NORMAL
-
         for char in line:
-            old = state
             if state == STATE_NORMAL:
                 if char in " \t":
                     tokens.append(current)
@@ -154,39 +156,28 @@ class PublicKey(object):
             elif state == STATE_DQUOTE_ESCAPE:
                 current += char
                 state = STATE_DQUOTE
-
         if current:
             tokens.append(current)
 
-        # the only way of reliably distinguishing between options and key types
-        # is to check whether the following token starts with a base64-encoded
-        # length + type, and return the previous token on first match.
+        # Find the key-type token, which might look like anything, but is
+        # *always* followed by the actual key blob. Conveniently, the blob
+        # always starts with the same key type.
 
         algo_pos = None
-
-        if strict_algo:
-            last_token = None
-            for pos, token in enumerate(tokens):
-                token = token.encode("utf-8")
-                # assume there isn't going to be a type longer than 255 bytes
-                if pos > 0 and token.startswith(b"AAAA"):
-                    prefix = struct.pack("!Is", len(last_token), last_token)
-                    token = base64.b64decode(token)
-                    if token.startswith(prefix):
-                        algo_pos = pos - 1
-                        break
-                last_token = token
-        else:
-            for pos, token in enumerate(tokens):
-                if token.startswith(("ssh-", "ecdsa-", "x509-sign-")):
-                    algo_pos = pos
+        for pos, token in enumerate(tokens):
+            token = token.encode("utf-8")
+            if pos > 0 and token.startswith(b"AAAA"):
+                # This assumes key types are shorter than 256 bytes.
+                prefix = struct.pack("!Is", len(prev_token), prev_token)
+                if base64.b64decode(token).startswith(prefix):
+                    algo_pos = pos - 1
                     break
-
+            else:
+                prev_token = token
         if algo_pos is None:
-            # this might be a SSHv1 key; fuck that.
-            raise ValueError("key blob not found (incorrect type?)")
+            raise ValueError("key blob not found (or doesn't match declared key-type)")
 
-        prefix = " ".join(tokens[0:algo_pos])
+        prefix = " ".join(tokens[:algo_pos])
         algo = tokens[algo_pos]
         blob = tokens[algo_pos+1]
         blob = base64.b64decode(blob.encode("utf-8"))
